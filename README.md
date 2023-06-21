@@ -1,4 +1,5 @@
 # Rust Tukey Test
+
 This script performs a Tukey test based on user inputs. It calculates the critical q value for a Tukey test, given the number of groups and total observations. The critical q value can be used to determine if there are statistically significant differences between the means of multiple groups.
 
 ## Background
@@ -20,12 +21,21 @@ The Tukey test is useful in various fields, such as experimental research, socia
 2. Open a terminal and navigate to the project directory.
 
 3. Compile the Rust script using the following command:
+`$ rustc tukey_test.rs`
+
 
 4. Run the compiled binary with the desired command line arguments. The required arguments are:
 - `<group_count>`: Number of groups in the data.
 - `<total_count>`: Total number of observations.
 
 For example, to perform a Tukey test with 4 groups and a total of 20 observations, run the following command:
+`$ ./tukey_test 4 20`
+
+
+Replace `<group_count>` and `<total_count>` with the actual values for your data.
+
+5. The script will calculate the critical q value and display the result.
+
 
 
 
