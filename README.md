@@ -16,7 +16,8 @@ The Tukey test is useful in various fields, such as experimental research, socia
 
 ## How to Run the Code
 
-1. Clone or download this repository to your local machine.
+1. Clone or download this repository to your local machine. 
+Run this command in your terminal `git clone https://github.com/TechieTeee/Rust_Tukey_Test.git` or use the download button.
 
 2. Open a terminal and navigate to the project directory.
 
