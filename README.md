@@ -19,7 +19,8 @@ The Tukey test is useful in various fields, such as experimental research, socia
 1. Clone or download this repository to your local machine. 
 Run this command in your terminal `git clone https://github.com/TechieTeee/Rust_Tukey_Test.git` or use the download button.
 
-2. Open a terminal and navigate to the project directory.
+2. If haven't already opened your terminal, open a terminal and navigate to the project directory.
+`cd Rust_Tukey_Test`
 
 3. Compile the Rust script using the following command:
 `$ rustc tukey_test.rs`
