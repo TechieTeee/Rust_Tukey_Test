@@ -15,13 +15,37 @@
 
 ---
 
-## Why tukey_test?
+## The Problem
+
+You're comparing three drug dosages, five marketing campaigns, or four manufacturing processes. A simple t-test won't work — running multiple pairwise t-tests inflates your false positive rate. With 5 groups, that's 10 comparisons, and your chance of a spurious "significant" result climbs from 5% to nearly 40%.
+
+**Post-hoc tests solve this.** They control the family-wise error rate, giving you honest answers about which groups truly differ — not statistical noise.
+
+> **ANOVA tells you *something* differs. Post-hoc tests tell you *what*.**
+
+---
+
+## Real-World Applications
+
+**Medicine & Clinical Trials** — Compare patient outcomes across treatment arms. A hospital testing three pain medications needs to know not just that outcomes differ, but *which drug works best* and by how much, while controlling for multiple comparisons that could lead to approving an ineffective treatment.
+
+**Agriculture & Food Science** — Compare crop yields across fertilizer types, or taste scores across formulations. The Tukey test was originally developed by John Tukey at Princeton for exactly these kinds of agricultural experiments — its design is purpose-built for "which of these treatments actually made a difference?"
+
+**Manufacturing & Quality Control** — Compare defect rates or tolerances across production lines, shifts, or suppliers. When a factory runs five machines making the same part, Dunnett's test can flag which machines deviate from the reference line without false alarms.
+
+**Software & A/B Testing** — Compare conversion rates, latency, or engagement metrics across multiple variants. With 4+ variants, pairwise t-tests give misleading results; Tukey HSD or Games-Howell gives you defensible answers.
+
+**Education & Social Science** — Compare test scores across teaching methods, survey responses across demographics, or behavioral outcomes across intervention groups. These fields routinely analyze 3-10 groups and need post-hoc tests that reviewers and journals accept.
+
+**Environmental Science** — Compare pollution levels across sites, species counts across habitats, or water quality across treatment methods. Ragged data (unequal sample sizes) is the norm here, which is why Tukey-Kramer and Games-Howell matter.
+
+---
+
+## Why Rust?
 
 Rust's ecosystem for data science is growing fast — but access to foundational statistical tests has lagged behind R and Python. Researchers, engineers, and analysts working in Rust shouldn't have to shell out to another language just to answer: *"which groups are actually different?"*
 
-`tukey_test` brings that capability natively to Rust. It's lightweight, correct, and designed to drop into existing data pipelines — whether you're running clinical trials, optimizing manufacturing processes, analyzing A/B tests, or building research tools.
-
-> **ANOVA tells you *something* differs. Post-hoc tests tell you *what*.**
+`tukey_test` brings that capability natively to Rust. It's lightweight, correct, and designed to drop into existing data pipelines. Zero required dependencies. No unsafe code. Just add it to your `Cargo.toml` and go.
 
 ---
 
