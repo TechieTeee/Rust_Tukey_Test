@@ -17,9 +17,9 @@
 
 ## The Problem
 
-You're comparing three drug dosages, five marketing campaigns, or four manufacturing processes. A simple t-test won't work — running multiple pairwise t-tests inflates your false positive rate. With 5 groups, that's 10 comparisons, and your chance of a spurious "significant" result climbs from 5% to nearly 40%.
+You're comparing three drug dosages, five marketing campaigns, or four manufacturing processes. A simple t-test won't work - running multiple pairwise t-tests inflates your false positive rate. With 5 groups, that's 10 comparisons, and your chance of a spurious "significant" result climbs from 5% to nearly 40%.
 
-**Post-hoc tests solve this.** They control the family-wise error rate, giving you honest answers about which groups truly differ — not statistical noise.
+**Post-hoc tests solve this.** They control the family-wise error rate, giving you honest answers about which groups truly differ - not statistical noise.
 
 > **ANOVA tells you *something* differs. Post-hoc tests tell you *what*.**
 
@@ -27,32 +27,32 @@ You're comparing three drug dosages, five marketing campaigns, or four manufactu
 
 ## Real-World Applications
 
-**Medicine & Clinical Trials** — Compare patient outcomes across treatment arms. A hospital testing three pain medications needs to know not just that outcomes differ, but *which drug works best* and by how much, while controlling for multiple comparisons that could lead to approving an ineffective treatment.
+**Medicine & Clinical Trials** - Compare patient outcomes across treatment arms. A hospital testing three pain medications needs to know not just that outcomes differ, but *which drug works best* and by how much, while controlling for multiple comparisons that could lead to approving an ineffective treatment.
 
-**Agriculture & Food Science** — Compare crop yields across fertilizer types, or taste scores across formulations. The Tukey test was originally developed by John Tukey at Princeton for exactly these kinds of agricultural experiments — its design is purpose-built for "which of these treatments actually made a difference?"
+**Agriculture & Food Science** - Compare crop yields across fertilizer types, or taste scores across formulations. The Tukey test was originally developed by John Tukey at Princeton for exactly these kinds of agricultural experiments - its design is purpose-built for "which of these treatments actually made a difference?"
 
-**Manufacturing & Quality Control** — Compare defect rates or tolerances across production lines, shifts, or suppliers. When a factory runs five machines making the same part, Dunnett's test can flag which machines deviate from the reference line without false alarms.
+**Manufacturing & Quality Control** - Compare defect rates or tolerances across production lines, shifts, or suppliers. When a factory runs five machines making the same part, Dunnett's test can flag which machines deviate from the reference line without false alarms.
 
-**Software & A/B Testing** — Compare conversion rates, latency, or engagement metrics across multiple variants. With 4+ variants, pairwise t-tests give misleading results; Tukey HSD or Games-Howell gives you defensible answers.
+**Software & A/B Testing** - Compare conversion rates, latency, or engagement metrics across multiple variants. With 4+ variants, pairwise t-tests give misleading results; Tukey HSD or Games-Howell gives you defensible answers.
 
-**Education & Social Science** — Compare test scores across teaching methods, survey responses across demographics, or behavioral outcomes across intervention groups. These fields routinely analyze 3-10 groups and need post-hoc tests that reviewers and journals accept.
+**Education & Social Science** - Compare test scores across teaching methods, survey responses across demographics, or behavioral outcomes across intervention groups. These fields routinely analyze 3-10 groups and need post-hoc tests that reviewers and journals accept.
 
-**Environmental Science** — Compare pollution levels across sites, species counts across habitats, or water quality across treatment methods. Ragged data (unequal sample sizes) is the norm here, which is why Tukey-Kramer and Games-Howell matter.
+**Environmental Science** - Compare pollution levels across sites, species counts across habitats, or water quality across treatment methods. Ragged data (unequal sample sizes) is the norm here, which is why Tukey-Kramer and Games-Howell matter.
 
 ---
 
 ## Why Rust?
 
-Rust has been ranked the **most admired programming language** in the Stack Overflow Developer Survey for nine consecutive years (2016–2024). Developer adoption is accelerating — Rust is now used in the Linux kernel, the Windows kernel, the Android platform, and major infrastructure at AWS, Microsoft, Google, and Meta. It is no longer a niche systems language; it is becoming the default choice for any new software where correctness, performance, and long-term maintainability matter.
+Rust has been ranked the **most admired programming language** in the Stack Overflow Developer Survey for nine consecutive years (2016–2024). Developer adoption is accelerating - Rust is now used in the Linux kernel, the Windows kernel, the Android platform, and major infrastructure at AWS, Microsoft, Google, and Meta. It is no longer a niche systems language; it is becoming the default choice for any new software where correctness, performance, and long-term maintainability matter.
 
 The statistical computing ecosystem hasn't kept up. `tukey_test` is part of closing that gap.
 
 ---
 
-R, Python, and Mathematica are great for interactive analysis in a notebook. But when you're **building something that runs statistical tests in production** — a clinical trial pipeline, a manufacturing quality system, a real-time A/B testing platform — those tools create serious problems:
+R, Python, and Mathematica are great for interactive analysis in a notebook. But when you're **building something that runs statistical tests in production** - a clinical trial pipeline, a manufacturing quality system, a real-time A/B testing platform - those tools create serious problems:
 
 - You have to shell out to another language mid-pipeline, adding subprocess overhead, serialization, and a fragile runtime dependency
-- Python and R's numerical output can vary by OS, version, and BLAS library — meaning results on your laptop may not match production
+- Python and R's numerical output can vary by OS, version, and BLAS library - meaning results on your laptop may not match production
 - Deploying a Python + scipy + numpy stack (or an R environment) on edge hardware, in Docker, or in WebAssembly is genuinely painful
 
 **This is the gap `tukey_test` fills.** Post-hoc statistical tests have essentially zero native Rust coverage. If you needed Tukey HSD in a Rust service today, your options were: reimplement it yourself, shell out to R, or change languages. None of those are acceptable in a serious production codebase.
@@ -60,20 +60,20 @@ R, Python, and Mathematica are great for interactive analysis in a notebook. But
 ### Four reasons this matters
 
 **1. Correctness you can trust**
-Rust's type system and borrow checker eliminate whole categories of bugs — buffer overruns, data races, silent memory corruption — that have caused real errors in scientific software. Reproducibility is a well-documented crisis in research. A statistically correct implementation that *cannot silently corrupt memory* is a different class of software than a Python script that happens to produce the right answer most of the time.
+Rust's type system and borrow checker eliminate whole categories of bugs - buffer overruns, data races, silent memory corruption - that have caused real errors in scientific software. Reproducibility is a well-documented crisis in research. A statistically correct implementation that *cannot silently corrupt memory* is a different class of software than a Python script that happens to produce the right answer most of the time.
 
 **2. Deterministic results everywhere**
-Rust produces bit-for-bit identical output across platforms and operating systems. For auditable systems — FDA regulatory submissions, financial reporting, clinical trial analysis — that determinism is not a nice-to-have, it's a requirement. R and Python cannot make that guarantee.
+Rust produces bit-for-bit identical output across platforms and operating systems. For auditable systems - FDA regulatory submissions, financial reporting, clinical trial analysis - that determinism is not a nice-to-have, it's a requirement. R and Python cannot make that guarantee.
 
 **3. Zero-overhead integration**
-A Rust service can call `tukey_hsd()` directly in the same process, with no FFI, no subprocess, no round-trip serialization. For high-frequency data processing or embedded applications — real-time sensor analysis, manufacturing QC on the line — that's the difference between feasible and not.
+A Rust service can call `tukey_hsd()` directly in the same process, with no FFI, no subprocess, no round-trip serialization. For high-frequency data processing or embedded applications - real-time sensor analysis, manufacturing QC on the line - that's the difference between feasible and not.
 
 **4. Simple, self-contained deployment**
 A Rust binary with zero required dependencies ships as a single executable. No runtime to install, no package manager to invoke, no version conflicts. Compare that to deploying a full R or Python scientific stack on edge hardware or in a serverless function.
 
 ### Who this is for
 
-The intended user is not a statistician choosing between tools for a one-off analysis — use R or Python for that. This crate is for the **Rust engineer** who already knows what statistical test they need and is now building the system that runs it reliably, repeatedly, and at scale. That person has had no good option until now.
+The intended user is not a statistician choosing between tools for a one-off analysis - use R or Python for that. This crate is for the **Rust engineer** who already knows what statistical test they need and is now building the system that runs it reliably, repeatedly, and at scale. That person has had no good option until now.
 
 ---
 
@@ -107,7 +107,7 @@ tukey_test = "0.2"
 
 ### ANOVA + Tukey HSD
 
-The most common workflow — test for an overall effect, then find which pairs differ:
+The most common workflow - test for an overall effect, then find which pairs differ:
 
 ```rust
 use tukey_test::{one_way_anova, tukey_hsd};
@@ -131,7 +131,7 @@ for pair in result.significant_pairs() {
 }
 ```
 
-### Games-Howell — when variances aren't equal
+### Games-Howell - when variances aren't equal
 
 ```rust
 use tukey_test::games_howell;
@@ -145,7 +145,7 @@ let result = games_howell(&data, 0.05).unwrap();
 println!("{result}");
 ```
 
-### Dunnett's test — compare against a control
+### Dunnett's test - compare against a control
 
 ```rust
 use tukey_test::dunnett;
@@ -162,7 +162,7 @@ for t in result.significant_treatments() {
 }
 ```
 
-### Levene's test — check variance equality before choosing Tukey vs Games-Howell
+### Levene's test - check variance equality before choosing Tukey vs Games-Howell
 
 ```rust
 use tukey_test::levene_test;
@@ -173,9 +173,9 @@ let data = vec![
 ];
 let result = levene_test(&data, 0.05).unwrap();
 if result.significant {
-    println!("Unequal variances detected — use games_howell()");
+    println!("Unequal variances detected - use games_howell()");
 } else {
-    println!("Variances are homogeneous — tukey_hsd() is appropriate");
+    println!("Variances are homogeneous - tukey_hsd() is appropriate");
 }
 ```
 
@@ -218,7 +218,7 @@ println!("η² = {:.3}, ω² = {:.3}", result.eta_squared, result.omega_squared)
 
 ### Flexible types in the library
 
-All test functions accept any type implementing `AsRef<[f64]>` for groups — no need to convert into `Vec<Vec<f64>>`:
+All test functions accept any type implementing `AsRef<[f64]>` for groups - no need to convert into `Vec<Vec<f64>>`:
 
 ```rust
 use tukey_test::one_way_anova;
@@ -290,7 +290,7 @@ cargo build --release
 ### Data input options
 
 ```sh
-# Inline — separate groups with --
+# Inline - separate groups with --
 tukey_test hsd 0.05 6 8 4 5 3 4 -- 8 12 9 11 6 8 -- 13 9 11 8 12 14
 
 # From a CSV file
@@ -383,14 +383,14 @@ Group  2 vs  0        1.0000     1.3868           No   [-0.7162, 2.7162]
 
 This crate aims to be the go-to resource for post-hoc and related statistical tests in Rust. Future plans include:
 
-- **Scheffe's test** — the most conservative post-hoc test, for complex contrasts
-- **Bonferroni / Holm corrections** — general-purpose p-value adjustment for multiple comparisons
-- **Welch's ANOVA** — one-way ANOVA without equal variance assumption
-- **Cohen's d** — pairwise effect size for individual comparisons
-- **Dunnett's test for any k/df** — remove table-based limits via numerical multivariate-t integration (currently requires df ≥ 5 and k ≤ 9)
-- **Games-Howell non-integer df** — fix Welch-Satterthwaite df truncation for more accurate p-values at small sample sizes
-- **`ptukey_cdf` extended validation** — comprehensive accuracy benchmarks against R across the full (k, df, q) grid, especially for k > 20 and df < 5
-- **`no_std` / `f32` support** — for embedded and WASM scientific computing targets
+- **Scheffe's test** - the most conservative post-hoc test, for complex contrasts
+- **Bonferroni / Holm corrections** - general-purpose p-value adjustment for multiple comparisons
+- **Welch's ANOVA** - one-way ANOVA without equal variance assumption
+- **Cohen's d** - pairwise effect size for individual comparisons
+- **Dunnett's test for any k/df** - remove table-based limits via numerical multivariate-t integration (currently requires df ≥ 5 and k ≤ 9)
+- **Games-Howell non-integer df** - fix Welch-Satterthwaite df truncation for more accurate p-values at small sample sizes
+- **`ptukey_cdf` extended validation** - comprehensive accuracy benchmarks against R across the full (k, df, q) grid, especially for k > 20 and df < 5
+- **`no_std` / `f32` support** - for embedded and WASM scientific computing targets
 
 These items are targeted for **0.3.0**.
 
