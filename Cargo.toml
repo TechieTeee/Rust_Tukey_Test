@@ -1,3 +1,13 @@
 [package]
-name = "Tukey_Test"
-version = "0.1.0"
+name = "tukey-test"
+version = "0.2.0"
+edition = "2021"
+description = "Tukey HSD (Honestly Significant Difference) test and studentized range distribution critical values"
+license = "MIT"
+repository = "https://github.com/TechieTeee/Rust_Tukey_Test"
+keywords = ["statistics", "tukey", "anova", "hypothesis-testing", "post-hoc"]
+categories = ["science", "mathematics"]
+
+[[bin]]
+name = "tukey-test"
+path = "src/main.rs"

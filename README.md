@@ -10,35 +10,83 @@ The test calculates a critical value (q value) based on the number of groups and
 
 The Tukey test is useful in various fields, such as experimental research, social sciences, and business analytics. It allows researchers and analysts to gain insights into the significant differences between multiple groups, enabling them to make informed decisions or draw meaningful conclusions.
 
+## Features
+
+- **Tukey HSD test** — full pairwise comparison of group means with confidence intervals
+- **Tukey-Kramer adjustment** — automatically handles unequal group sizes
+- **Studentized range (q) critical values** — lookup table for k = 2-10 groups, df = 1-120, at alpha = 0.05 and 0.01
+- **Library + CLI** — use as a Rust dependency or from the command line
+
+## Using as a Library
+
+Add to your `Cargo.toml`:
+
+```toml
+[dependencies]
+tukey-test = "0.2"
+```
+
+```rust
+use tukey_test::tukey_hsd;
+
+let data = vec![
+    vec![23.0, 25.0, 21.0, 24.0],  // Group A
+    vec![30.0, 28.0, 33.0, 31.0],  // Group B
+    vec![22.0, 24.0, 20.0, 23.0],  // Group C
+];
+
+let result = tukey_hsd(&data, 0.05).unwrap();
+println!("{result}");
+
+for pair in result.significant_pairs() {
+    println!("Groups {} and {} differ significantly (q = {:.4})",
+        pair.group_i, pair.group_j, pair.q_statistic);
+}
+```
+
+You can also look up critical q values directly:
+
+```rust
+let q = tukey_test::q_critical(3, 15, 0.05).unwrap();
+println!("q = {q:.4}"); // q = 3.6700
+```
+
 ## Prerequisites
 
-- Rust programming language (compiler and tools) installed. You can download Rust from the official website: [https://www.rust-lang.org](https://www.rust-lang.org)
+- Rust programming language (1.56+ for edition 2021). Install from [https://www.rust-lang.org](https://www.rust-lang.org)
 
-## How to Run the Code
+## CLI Usage
 
-1. Clone or download this repository to your local machine. 
-Run this command in your terminal `git clone https://github.com/TechieTeee/Rust_Tukey_Test.git` or use the download button.
+1. Clone and build:
 
-2. If haven't already opened your terminal, open a terminal and navigate to the project directory.
-`cd Rust_Tukey_Test`
+```sh
+git clone https://github.com/TechieTeee/Rust_Tukey_Test.git
+cd Rust_Tukey_Test
+cargo build --release
+```
 
-3. Compile the Rust script using the following command:
-`$ rustc tukey_test.rs`
+2. **Run the full Tukey HSD test** with your data (groups separated by `--`):
 
+```sh
+cargo run -- hsd 0.05 6 8 4 5 3 4 -- 8 12 9 11 6 8 -- 13 9 11 8 12 14
+```
 
-4. Run the compiled binary with the desired command line arguments. The required arguments are:
-- `<group_count>`: Number of groups in the data.
-- `<total_count>`: Total number of observations.
+Example output:
 
-For example, to perform a Tukey test with 4 groups and a total of 20 observations, run the following command:
-`$ ./tukey_test 4 20`
+```
+Tukey HSD Test Results (alpha = 0.05, df = 15, MSE = 4.4556, q_critical = 3.6700)
 
+Comparison      Mean Diff     q-stat  Significant   CI
+------------------------------------------------------------------------
+( 0,  1)           4.0000     4.6418          Yes   [-7.1626, -0.8374]
+( 0,  2)           6.1667     7.1561          Yes   [-9.3292, -3.0041]
+( 1,  2)           2.1667     2.5143           No   [-5.3292, 0.9959]
+```
 
-Replace `<group_count>` and `<total_count>` with the actual values for your data.
+3. **Look up a critical q value** by specifying the number of groups, degrees of freedom, and alpha:
 
-5. The script will calculate the critical q value and display the result.
-
-
-
-
+```sh
+cargo run -- q 3 15 0.05
+# q_critical(k=3, df=15, alpha=0.05) = 3.6700
+```
 
