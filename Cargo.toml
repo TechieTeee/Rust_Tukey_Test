@@ -1,12 +1,19 @@
 [package]
 name = "tukey-test"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
-description = "Tukey HSD (Honestly Significant Difference) test and studentized range distribution critical values"
+rust-version = "1.56"
+description = "Statistical post-hoc tests: Tukey HSD, Games-Howell, Dunnett, one-way ANOVA, and studentized range critical values — pure Rust, zero required dependencies"
 license = "MIT"
 repository = "https://github.com/TechieTeee/Rust_Tukey_Test"
 keywords = ["statistics", "tukey", "anova", "hypothesis-testing", "post-hoc"]
 categories = ["science", "mathematics"]
+
+[features]
+serde = ["dep:serde"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"], optional = true }
 
 [[bin]]
 name = "tukey-test"

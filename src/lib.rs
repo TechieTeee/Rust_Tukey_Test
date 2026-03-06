@@ -4,7 +4,9 @@
 //! - [`one_way_anova`] — one-way analysis of variance (F-test)
 //! - [`tukey_hsd`] — Tukey HSD test (assumes equal variances)
 //! - [`games_howell`] — Games-Howell test (does **not** assume equal variances)
+//! - [`dunnett`] — Dunnett's test (compare treatments against a control)
 //! - [`q_critical`] — studentized range distribution critical value lookup
+//! - [`dunnett_critical`] — Dunnett's critical value lookup
 //!
 //! # Example
 //!
@@ -39,6 +41,7 @@ use std::fmt;
 
 /// Errors that can occur during Tukey test operations.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TukeyError {
     /// Fewer than 2 groups were provided.
     TooFewGroups,
@@ -54,6 +57,10 @@ pub enum TukeyError {
     ZeroVariance,
     /// A group needs at least 2 observations (for per-group variance).
     GroupTooSmall(usize),
+    /// Control group index is out of range.
+    ControlGroupOutOfRange(usize),
+    /// Too many treatment groups for the Dunnett table (max 9).
+    TooManyTreatments(usize),
 }
 
 impl fmt::Display for TukeyError {
@@ -76,6 +83,12 @@ impl fmt::Display for TukeyError {
             TukeyError::GroupTooSmall(i) => {
                 write!(f, "group {i} needs at least 2 observations")
             }
+            TukeyError::ControlGroupOutOfRange(i) => {
+                write!(f, "control group index {i} is out of range")
+            }
+            TukeyError::TooManyTreatments(p) => {
+                write!(f, "too many treatment groups ({p}), maximum supported is 9")
+            }
         }
     }
 }
@@ -88,6 +101,7 @@ impl std::error::Error for TukeyError {}
 
 /// Results of a one-way ANOVA.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AnovaResult {
     /// Sum of squares between groups.
     pub ss_between: f64,
@@ -148,6 +162,7 @@ impl fmt::Display for AnovaResult {
 
 /// A single pairwise comparison between two groups.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PairwiseComparison {
     /// Index of the first group.
     pub group_i: usize,
@@ -171,6 +186,7 @@ pub struct PairwiseComparison {
 
 /// Full results of a Tukey HSD test.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TukeyResult {
     /// Number of groups.
     pub groups: usize,
@@ -231,6 +247,7 @@ impl fmt::Display for TukeyResult {
 
 /// Full results of a Games-Howell test.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GamesHowellResult {
     /// Number of groups.
     pub groups: usize,
@@ -275,6 +292,91 @@ impl fmt::Display for GamesHowellResult {
                 c.mean_diff,
                 c.q_statistic,
                 "",
+                if c.significant { "Yes" } else { "No" },
+                c.ci_lower,
+                c.ci_upper
+            )?;
+        }
+        Ok(())
+    }
+}
+
+/// A single comparison of a treatment group against the control.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct DunnettComparison {
+    /// Index of the treatment group.
+    pub treatment: usize,
+    /// Mean of the treatment group.
+    pub treatment_mean: f64,
+    /// Mean of the control group.
+    pub control_mean: f64,
+    /// Absolute difference between means.
+    pub mean_diff: f64,
+    /// Observed t statistic.
+    pub t_statistic: f64,
+    /// Whether the difference is statistically significant.
+    pub significant: bool,
+    /// Lower bound of the confidence interval for (treatment − control).
+    pub ci_lower: f64,
+    /// Upper bound of the confidence interval for (treatment − control).
+    pub ci_upper: f64,
+}
+
+/// Full results of a Dunnett's test.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct DunnettResult {
+    /// Index of the control group.
+    pub control: usize,
+    /// Number of treatment groups (excluding control).
+    pub treatments: usize,
+    /// Significance level used.
+    pub alpha: f64,
+    /// Critical value from the Dunnett distribution.
+    pub d_critical: f64,
+    /// Degrees of freedom (within groups).
+    pub df: usize,
+    /// Mean square error (pooled within-group variance).
+    pub mse: f64,
+    /// Mean of each group (including control).
+    pub group_means: Vec<f64>,
+    /// Number of observations in each group.
+    pub group_sizes: Vec<usize>,
+    /// Comparisons of each treatment against the control.
+    pub comparisons: Vec<DunnettComparison>,
+}
+
+impl DunnettResult {
+    /// Returns only the comparisons that are statistically significant.
+    #[must_use]
+    pub fn significant_treatments(&self) -> Vec<&DunnettComparison> {
+        self.comparisons.iter().filter(|c| c.significant).collect()
+    }
+}
+
+impl fmt::Display for DunnettResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(
+            f,
+            "Dunnett's Test Results (alpha = {}, control = group {}, df = {}, d_critical = {:.4})",
+            self.alpha, self.control, self.df, self.d_critical
+        )?;
+        writeln!(f)?;
+        writeln!(
+            f,
+            "{:<18} {:>10} {:>10} {:>12}   {}",
+            "Treatment", "Mean Diff", "t-stat", "Significant", "CI"
+        )?;
+        writeln!(f, "{}", "-".repeat(74))?;
+        for c in &self.comparisons {
+            writeln!(
+                f,
+                "Group {:>2} vs {:>2}    {:>10.4} {:>10.4} {:>12}   [{:.4}, {:.4}]",
+                c.treatment,
+                self.control,
+                c.mean_diff,
+                c.t_statistic,
                 if c.significant { "Yes" } else { "No" },
                 c.ci_lower,
                 c.ci_upper
@@ -337,6 +439,63 @@ const Q_TABLE_01: [[f64; 25] ; 9] = [
     [237.0, 30.68, 16.20, 11.93, 9.97, 8.87, 8.17, 7.68, 7.33, 7.05, 6.84, 6.67, 6.53, 6.41, 6.31, 6.22, 6.15, 6.08, 6.02, 5.97, 5.81, 5.65, 5.50, 5.36, 5.21],
     // k=10
     [245.6, 31.69, 16.69, 12.27, 10.24, 9.10, 8.37, 7.86, 7.49, 7.21, 6.99, 6.81, 6.67, 6.54, 6.44, 6.35, 6.27, 6.20, 6.14, 6.09, 5.92, 5.76, 5.60, 5.45, 5.30],
+];
+
+// ---------------------------------------------------------------------------
+// Dunnett's critical-value table (two-sided)
+// ---------------------------------------------------------------------------
+
+/// Degrees-of-freedom breakpoints for the Dunnett table.
+const DUNNETT_DF_VALUES: [usize; 21] = [
+    5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 24, 30, 40, 60, 120,
+];
+
+/// Dunnett two-sided critical values at alpha = 0.05.
+/// Indexed by [p-1][df_index] where p = number of treatment groups (1..=9).
+#[rustfmt::skip]
+const DUNNETT_TABLE_05: [[f64; 21]; 9] = [
+    // p=1
+    [2.57, 2.45, 2.36, 2.31, 2.26, 2.23, 2.20, 2.18, 2.16, 2.14, 2.13, 2.12, 2.11, 2.10, 2.09, 2.09, 2.06, 2.04, 2.02, 2.00, 1.98],
+    // p=2
+    [2.86, 2.70, 2.60, 2.53, 2.48, 2.44, 2.41, 2.38, 2.36, 2.34, 2.33, 2.32, 2.31, 2.30, 2.29, 2.28, 2.25, 2.23, 2.21, 2.19, 2.16],
+    // p=3
+    [3.03, 2.85, 2.74, 2.66, 2.61, 2.57, 2.53, 2.50, 2.48, 2.46, 2.44, 2.43, 2.42, 2.41, 2.40, 2.39, 2.36, 2.34, 2.31, 2.28, 2.26],
+    // p=4
+    [3.15, 2.95, 2.84, 2.76, 2.69, 2.65, 2.61, 2.58, 2.56, 2.53, 2.51, 2.50, 2.49, 2.48, 2.47, 2.46, 2.43, 2.40, 2.37, 2.35, 2.32],
+    // p=5
+    [3.24, 3.03, 2.91, 2.83, 2.76, 2.71, 2.67, 2.64, 2.61, 2.59, 2.57, 2.56, 2.54, 2.53, 2.52, 2.51, 2.48, 2.45, 2.42, 2.39, 2.37],
+    // p=6
+    [3.31, 3.10, 2.97, 2.88, 2.81, 2.77, 2.73, 2.69, 2.66, 2.64, 2.62, 2.60, 2.59, 2.58, 2.57, 2.56, 2.53, 2.50, 2.47, 2.44, 2.41],
+    // p=7
+    [3.37, 3.15, 3.02, 2.93, 2.86, 2.81, 2.77, 2.73, 2.70, 2.68, 2.66, 2.64, 2.62, 2.61, 2.60, 2.59, 2.56, 2.53, 2.50, 2.47, 2.44],
+    // p=8
+    [3.42, 3.20, 3.06, 2.97, 2.90, 2.85, 2.80, 2.77, 2.74, 2.71, 2.69, 2.67, 2.66, 2.64, 2.63, 2.62, 2.59, 2.56, 2.53, 2.49, 2.47],
+    // p=9
+    [3.47, 3.24, 3.10, 3.01, 2.93, 2.88, 2.84, 2.80, 2.77, 2.74, 2.72, 2.70, 2.69, 2.67, 2.66, 2.65, 2.62, 2.58, 2.55, 2.52, 2.49],
+];
+
+/// Dunnett two-sided critical values at alpha = 0.01.
+/// Indexed by [p-1][df_index] where p = number of treatment groups (1..=9).
+#[rustfmt::skip]
+const DUNNETT_TABLE_01: [[f64; 21]; 9] = [
+    // p=1
+    [4.03, 3.71, 3.50, 3.36, 3.25, 3.17, 3.11, 3.05, 3.01, 2.98, 2.95, 2.92, 2.90, 2.88, 2.86, 2.85, 2.80, 2.75, 2.70, 2.66, 2.62],
+    // p=2
+    [4.36, 3.99, 3.75, 3.58, 3.46, 3.37, 3.30, 3.24, 3.19, 3.16, 3.12, 3.09, 3.07, 3.05, 3.03, 3.01, 2.96, 2.90, 2.85, 2.80, 2.75],
+    // p=3
+    [4.56, 4.16, 3.90, 3.73, 3.60, 3.49, 3.42, 3.36, 3.31, 3.27, 3.23, 3.20, 3.17, 3.15, 3.13, 3.11, 3.05, 3.00, 2.94, 2.89, 2.84],
+    // p=4
+    [4.69, 4.28, 4.01, 3.83, 3.69, 3.59, 3.51, 3.44, 3.39, 3.35, 3.31, 3.28, 3.25, 3.23, 3.21, 3.19, 3.13, 3.07, 3.01, 2.95, 2.90],
+    // p=5
+    [4.80, 4.37, 4.09, 3.90, 3.76, 3.65, 3.57, 3.50, 3.45, 3.40, 3.36, 3.33, 3.30, 3.28, 3.26, 3.24, 3.18, 3.12, 3.06, 3.00, 2.95],
+    // p=6
+    [4.88, 4.44, 4.16, 3.96, 3.82, 3.71, 3.63, 3.56, 3.50, 3.45, 3.41, 3.38, 3.35, 3.33, 3.30, 3.29, 3.22, 3.16, 3.10, 3.04, 2.98],
+    // p=7
+    [4.95, 4.50, 4.21, 4.02, 3.87, 3.76, 3.67, 3.60, 3.54, 3.49, 3.45, 3.42, 3.39, 3.37, 3.34, 3.32, 3.26, 3.19, 3.13, 3.07, 3.01],
+    // p=8
+    [5.01, 4.56, 4.26, 4.06, 3.91, 3.80, 3.71, 3.64, 3.58, 3.53, 3.49, 3.45, 3.42, 3.40, 3.37, 3.35, 3.29, 3.22, 3.16, 3.09, 3.04],
+    // p=9
+    [5.06, 4.60, 4.31, 4.10, 3.95, 3.83, 3.74, 3.67, 3.61, 3.56, 3.52, 3.48, 3.45, 3.43, 3.40, 3.38, 3.31, 3.25, 3.18, 3.12, 3.06],
 ];
 
 // ---------------------------------------------------------------------------
@@ -405,6 +564,66 @@ pub fn q_critical(k: usize, df: usize, alpha: f64) -> Result<f64, TukeyError> {
     let inv_df = 1.0 / df as f64;
     let inv_lo = 1.0 / DF_VALUES[lower_idx] as f64;
     let inv_hi = 1.0 / DF_VALUES[upper_idx] as f64;
+    let t = (inv_df - inv_hi) / (inv_lo - inv_hi);
+
+    Ok(row[lower_idx] * t + row[upper_idx] * (1.0 - t))
+}
+
+/// Look up the critical value from the Dunnett distribution (two-sided).
+///
+/// # Arguments
+/// * `p` — number of treatment groups, excluding the control (1..=9)
+/// * `df` — degrees of freedom within groups (≥ 5)
+/// * `alpha` — significance level (0.05 or 0.01)
+///
+/// # Example
+/// ```
+/// let d = tukey_test::dunnett_critical(2, 20, 0.05).unwrap();
+/// assert!((d - 2.28).abs() < 0.01);
+/// ```
+pub fn dunnett_critical(p: usize, df: usize, alpha: f64) -> Result<f64, TukeyError> {
+    if p < 1 || p > 9 {
+        return Err(TukeyError::TooManyTreatments(p));
+    }
+    if df < 5 {
+        return Err(TukeyError::InsufficientDf);
+    }
+
+    let table = if (alpha - 0.05).abs() < 1e-10 {
+        &DUNNETT_TABLE_05
+    } else if (alpha - 0.01).abs() < 1e-10 {
+        &DUNNETT_TABLE_01
+    } else {
+        return Err(TukeyError::UnsupportedAlpha(alpha));
+    };
+
+    let row = &table[p - 1];
+
+    if df >= 120 {
+        return Ok(row[20]);
+    }
+
+    // Exact match
+    for (i, &d) in DUNNETT_DF_VALUES.iter().enumerate() {
+        if d == df {
+            return Ok(row[i]);
+        }
+    }
+
+    // Interpolate on 1/df
+    let mut lower_idx = 0;
+    for (i, &d) in DUNNETT_DF_VALUES.iter().enumerate() {
+        if d < df {
+            lower_idx = i;
+        } else {
+            break;
+        }
+    }
+    let upper_idx = lower_idx + 1;
+
+    let inv_df = 1.0 / df as f64;
+    let inv_lo = 1.0 / DUNNETT_DF_VALUES[lower_idx] as f64;
+    let inv_hi = 1.0 / DUNNETT_DF_VALUES[upper_idx] as f64;
     let t = (inv_df - inv_hi) / (inv_lo - inv_hi);
 
     Ok(row[lower_idx] * t + row[upper_idx] * (1.0 - t))
@@ -807,6 +1026,117 @@ pub fn games_howell(data: &[Vec<f64>], alpha: f64) -> Result<GamesHowellResult, 
 }
 
 // ---------------------------------------------------------------------------
+// Dunnett's test
+// ---------------------------------------------------------------------------
+
+/// Perform Dunnett's test (two-sided) comparing each treatment group against a
+/// control group.
+///
+/// # Arguments
+/// * `data` — slice of groups, each group a `Vec<f64>` of observations
+/// * `control` — index of the control group (usually 0)
+/// * `alpha` — significance level (0.05 or 0.01)
+///
+/// # Example
+/// ```
+/// use tukey_test::dunnett;
+///
+/// let data = vec![
+///     vec![10.0, 12.0, 11.0, 9.0, 10.0],  // control
+///     vec![15.0, 17.0, 14.0, 16.0, 15.0],  // treatment A
+///     vec![11.0, 13.0, 10.0, 12.0, 11.0],  // treatment B
+/// ];
+/// let result = dunnett(&data, 0, 0.05).unwrap();
+/// assert!(!result.significant_treatments().is_empty());
+/// ```
+pub fn dunnett(data: &[Vec<f64>], control: usize, alpha: f64) -> Result<DunnettResult, TukeyError> {
+    let k = data.len();
+    if k < 2 {
+        return Err(TukeyError::TooFewGroups);
+    }
+    if control >= k {
+        return Err(TukeyError::ControlGroupOutOfRange(control));
+    }
+    let p = k - 1; // number of treatment groups
+    if p > 9 {
+        return Err(TukeyError::TooManyTreatments(p));
+    }
+
+    let mut group_means = Vec::with_capacity(k);
+    let mut group_sizes = Vec::with_capacity(k);
+    let mut n_total: usize = 0;
+
+    for (i, group) in data.iter().enumerate() {
+        if group.is_empty() {
+            return Err(TukeyError::EmptyGroup(i));
+        }
+        let n = group.len();
+        group_sizes.push(n);
+        n_total += n;
+        group_means.push(group.iter().sum::<f64>() / n as f64);
+    }
+
+    let df = n_total - k;
+    if df < 5 {
+        return Err(TukeyError::InsufficientDf);
+    }
+
+    // Pooled MSE
+    let mut ss_within = 0.0;
+    for (i, group) in data.iter().enumerate() {
+        let mean = group_means[i];
+        for &x in group {
+            ss_within += (x - mean).powi(2);
+        }
+    }
+    let mse = ss_within / df as f64;
+
+    if mse == 0.0 {
+        return Err(TukeyError::ZeroVariance);
+    }
+
+    let d_crit = dunnett_critical(p, df, alpha)?;
+    let control_mean = group_means[control];
+    let n_control = group_sizes[control] as f64;
+
+    let mut comparisons = Vec::new();
+    for i in 0..k {
+        if i == control {
+            continue;
+        }
+        let raw_diff = group_means[i] - control_mean;
+        let mean_diff = raw_diff.abs();
+        let se = (mse * (1.0 / group_sizes[i] as f64 + 1.0 / n_control)).sqrt();
+        let t_stat = mean_diff / se;
+        let significant = t_stat > d_crit;
+
+        let ci_half = d_crit * se;
+        comparisons.push(DunnettComparison {
+            treatment: i,
+            treatment_mean: group_means[i],
+            control_mean,
+            mean_diff,
+            t_statistic: t_stat,
+            significant,
+            ci_lower: raw_diff - ci_half,
+            ci_upper: raw_diff + ci_half,
+        });
+    }
+
+    Ok(DunnettResult {
+        control,
+        treatments: p,
+        alpha,
+        d_critical: d_crit,
+        df,
+        mse,
+        group_means,
+        group_sizes,
+        comparisons,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1010,5 +1340,74 @@ mod tests {
         // Need at least 2 observations per group for variance
         let err = games_howell(&[vec![1.0], vec![2.0, 3.0]], 0.05).unwrap_err();
         assert_eq!(err, TukeyError::GroupTooSmall(0));
+    }
+
+    // --- Dunnett tests ---
+
+    #[test]
+    fn dunnett_critical_lookup() {
+        // p=2, df=20, alpha=0.05 should be 2.28
+        let d = dunnett_critical(2, 20, 0.05).unwrap();
+        assert!((d - 2.28).abs() < 0.01, "got {d}");
+    }
+
+    #[test]
+    fn dunnett_critical_interpolation() {
+        // df=25 is between df=24 and df=30
+        let d = dunnett_critical(1, 25, 0.05).unwrap();
+        assert!(d > 2.04 && d < 2.06, "got {d}");
+    }
+
+    #[test]
+    fn dunnett_critical_errors() {
+        assert_eq!(dunnett_critical(0, 10, 0.05), Err(TukeyError::TooManyTreatments(0)));
+        assert_eq!(dunnett_critical(10, 10, 0.05), Err(TukeyError::TooManyTreatments(10)));
+        assert_eq!(dunnett_critical(1, 4, 0.05), Err(TukeyError::InsufficientDf));
+        assert_eq!(dunnett_critical(1, 10, 0.10), Err(TukeyError::UnsupportedAlpha(0.10)));
+    }
+
+    #[test]
+    fn dunnett_basic() {
+        let data = vec![
+            vec![10.0, 12.0, 11.0, 9.0, 10.0],  // control
+            vec![15.0, 17.0, 14.0, 16.0, 15.0],  // treatment A
+            vec![11.0, 13.0, 10.0, 12.0, 11.0],  // treatment B
+        ];
+        let r = dunnett(&data, 0, 0.05).unwrap();
+        assert_eq!(r.control, 0);
+        assert_eq!(r.treatments, 2);
+        assert_eq!(r.comparisons.len(), 2);
+
+        // Treatment A (mean 15.4) should differ from control (mean 10.4)
+        let sig = r.significant_treatments();
+        assert!(
+            sig.iter().any(|c| c.treatment == 1),
+            "treatment A should differ from control"
+        );
+    }
+
+    #[test]
+    fn dunnett_non_zero_control() {
+        // Use the last group as control
+        let data = vec![
+            vec![15.0, 17.0, 14.0, 16.0, 15.0],
+            vec![11.0, 13.0, 10.0, 12.0, 11.0],
+            vec![10.0, 12.0, 11.0, 9.0, 10.0],  // control
+        ];
+        let r = dunnett(&data, 2, 0.05).unwrap();
+        assert_eq!(r.control, 2);
+        assert_eq!(r.comparisons.len(), 2);
+    }
+
+    #[test]
+    fn dunnett_errors() {
+        let data = vec![
+            vec![1.0, 2.0, 3.0],
+            vec![4.0, 5.0, 6.0],
+        ];
+        assert_eq!(
+            dunnett(&data, 5, 0.05).unwrap_err(),
+            TukeyError::ControlGroupOutOfRange(5)
+        );
     }
 }

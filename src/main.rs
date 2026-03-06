@@ -1,7 +1,7 @@
 use std::env;
 use std::process;
 
-use tukey_test::{games_howell, one_way_anova, q_critical, tukey_hsd};
+use tukey_test::{dunnett, games_howell, one_way_anova, q_critical, tukey_hsd};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -10,18 +10,21 @@ fn main() {
         Some("anova") => run_anova(&args[2..]),
         Some("hsd") => run_hsd(&args[2..]),
         Some("games-howell") => run_games_howell(&args[2..]),
+        Some("dunnett") => run_dunnett(&args[2..]),
         Some("q") => run_q_lookup(&args[2..]),
         _ => {
             eprintln!("Usage:");
             eprintln!("  tukey-test anova <group1> -- <group2> -- <group3> [-- ...]");
             eprintln!("  tukey-test hsd <alpha> <group1> -- <group2> -- <group3> [-- ...]");
             eprintln!("  tukey-test games-howell <alpha> <group1> -- <group2> -- <group3> [-- ...]");
+            eprintln!("  tukey-test dunnett <alpha> <control_index> <group1> -- <group2> -- <group3> [-- ...]");
             eprintln!("  tukey-test q <k> <df> <alpha>");
             eprintln!();
             eprintln!("Examples:");
             eprintln!("  tukey-test anova 6 8 4 5 3 4 -- 8 12 9 11 6 8 -- 13 9 11 8 12 14");
             eprintln!("  tukey-test hsd 0.05 6 8 4 5 3 4 -- 8 12 9 11 6 8 -- 13 9 11 8 12 14");
             eprintln!("  tukey-test games-howell 0.05 4 5 3 4 6 -- 20 30 25 35 28 -- 5 7 6 4 5");
+            eprintln!("  tukey-test dunnett 0.05 0 10 12 11 9 10 -- 15 17 14 16 15 -- 11 13 10 12 11");
             eprintln!("  tukey-test q 3 15 0.05");
             process::exit(1);
         }
@@ -141,6 +144,37 @@ fn run_games_howell(args: &[String]) {
     }
 
     match games_howell(&groups, alpha) {
+        Ok(result) => print!("{result}"),
+        Err(e) => {
+            eprintln!("Error: {e}");
+            process::exit(1);
+        }
+    }
+}
+
+fn run_dunnett(args: &[String]) {
+    if args.len() < 2 {
+        eprintln!("Usage: tukey-test dunnett <alpha> <control_index> <group1> -- <group2> -- ...");
+        process::exit(1);
+    }
+
+    let alpha: f64 = args[0].parse().unwrap_or_else(|_| {
+        eprintln!("Invalid alpha: {}", args[0]);
+        process::exit(1);
+    });
+
+    let control: usize = args[1].parse().unwrap_or_else(|_| {
+        eprintln!("Invalid control group index: {}", args[1]);
+        process::exit(1);
+    });
+
+    let groups = parse_groups(&args[2..]);
+    if groups.len() < 2 {
+        eprintln!("Error: need at least 2 groups (separate with --)");
+        process::exit(1);
+    }
+
+    match dunnett(&groups, control, alpha) {
         Ok(result) => print!("{result}"),
         Err(e) => {
             eprintln!("Error: {e}");
