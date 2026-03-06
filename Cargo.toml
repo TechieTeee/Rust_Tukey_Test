@@ -1,5 +1,5 @@
 [package]
-name = "tukey-test"
+name = "tukey_test"
 version = "0.2.0"
 edition = "2021"
 rust-version = "1.56"
@@ -16,5 +16,5 @@ serde = ["dep:serde"]
 serde = { version = "1", features = ["derive"], optional = true }
 
 [[bin]]
-name = "tukey-test"
+name = "tukey_test"
 path = "src/main.rs"
