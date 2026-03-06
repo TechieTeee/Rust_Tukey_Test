@@ -152,7 +152,7 @@ one_way_anova(&data).unwrap();
 
 ### Load from CSV
 
-Read data from CSV files in **wide format** (each column is a group). Headers are auto-detected and skipped. Columns can have unequal lengths.
+Read data from CSV files in **wide format** (each column is a group). Headers are auto-detected and skipped. Columns can have unequal lengths. Values of `NaN`, `Infinity`, and `-Infinity` are rejected with a `ParseError`.
 
 ```
 control,treatment_a,treatment_b
