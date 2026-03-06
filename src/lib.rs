@@ -7,6 +7,10 @@
 //! - [`dunnett`] — Dunnett's test (compare treatments against a control)
 //! - [`q_critical`] — studentized range distribution critical value lookup
 //! - [`dunnett_critical`] — Dunnett's critical value lookup
+//! - [`parse_csv`] — load grouped data from CSV (wide format)
+//!
+//! All test functions accept any type implementing `AsRef<[f64]>` for groups,
+//! so you can pass `&[Vec<f64>]`, `&[&[f64]]`, or `&[[f64; N]]`.
 //!
 //! # Example
 //!
@@ -34,6 +38,7 @@
 //! ```
 
 use std::fmt;
+use std::io;
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -61,6 +66,12 @@ pub enum TukeyError {
     ControlGroupOutOfRange(usize),
     /// Too many treatment groups for the Dunnett table (max 9).
     TooManyTreatments(usize),
+    /// I/O error when reading data.
+    IoError(String),
+    /// Failed to parse a value in CSV data.
+    ParseError { line: usize, column: usize, value: String },
+    /// CSV data has no columns.
+    EmptyCsv,
 }
 
 impl fmt::Display for TukeyError {
@@ -88,6 +99,13 @@ impl fmt::Display for TukeyError {
             }
             TukeyError::TooManyTreatments(p) => {
                 write!(f, "too many treatment groups ({p}), maximum supported is 9")
+            }
+            TukeyError::IoError(msg) => write!(f, "I/O error: {msg}"),
+            TukeyError::ParseError { line, column, value } => {
+                write!(f, "failed to parse \"{value}\" as number (line {line}, column {column})")
+            }
+            TukeyError::EmptyCsv => {
+                write!(f, "CSV data has no columns")
             }
         }
     }
@@ -636,7 +654,7 @@ pub fn dunnett_critical(p: usize, df: usize, alpha: f64) -> Result<f64, TukeyErr
 /// equal in size).
 ///
 /// # Arguments
-/// * `data` — slice of groups, each group a `Vec<f64>` of observations
+/// * `data` — slice of groups; each group can be any type implementing `AsRef<[f64]>`
 /// * `alpha` — significance level (0.05 or 0.01)
 ///
 /// # Example
@@ -651,7 +669,7 @@ pub fn dunnett_critical(p: usize, df: usize, alpha: f64) -> Result<f64, TukeyErr
 /// let result = tukey_hsd(&data, 0.05).unwrap();
 /// assert_eq!(result.significant_pairs().len(), 2);
 /// ```
-pub fn tukey_hsd(data: &[Vec<f64>], alpha: f64) -> Result<TukeyResult, TukeyError> {
+pub fn tukey_hsd<T: AsRef<[f64]>>(data: &[T], alpha: f64) -> Result<TukeyResult, TukeyError> {
     let k = data.len();
     if k < 2 {
         return Err(TukeyError::TooFewGroups);
@@ -666,13 +684,14 @@ pub fn tukey_hsd(data: &[Vec<f64>], alpha: f64) -> Result<TukeyResult, TukeyErro
     let mut n_total: usize = 0;
 
     for (i, group) in data.iter().enumerate() {
-        if group.is_empty() {
+        let g = group.as_ref();
+        if g.is_empty() {
             return Err(TukeyError::EmptyGroup(i));
         }
-        let n = group.len();
+        let n = g.len();
         group_sizes.push(n);
         n_total += n;
-        group_means.push(group.iter().sum::<f64>() / n as f64);
+        group_means.push(g.iter().sum::<f64>() / n as f64);
     }
 
     let df = n_total - k;
@@ -684,7 +703,7 @@ pub fn tukey_hsd(data: &[Vec<f64>], alpha: f64) -> Result<TukeyResult, TukeyErro
     let mut ss_within = 0.0;
     for (i, group) in data.iter().enumerate() {
         let mean = group_means[i];
-        for &x in group {
+        for &x in group.as_ref() {
             ss_within += (x - mean).powi(2);
         }
     }
@@ -852,7 +871,7 @@ fn f_sf(x: f64, d1: f64, d2: f64) -> f64 {
 /// let result = one_way_anova(&data).unwrap();
 /// assert!(result.p_value < 0.05);
 /// ```
-pub fn one_way_anova(data: &[Vec<f64>]) -> Result<AnovaResult, TukeyError> {
+pub fn one_way_anova<T: AsRef<[f64]>>(data: &[T]) -> Result<AnovaResult, TukeyError> {
     let k = data.len();
     if k < 2 {
         return Err(TukeyError::TooFewGroups);
@@ -864,11 +883,12 @@ pub fn one_way_anova(data: &[Vec<f64>]) -> Result<AnovaResult, TukeyError> {
     let mut grand_sum = 0.0_f64;
 
     for (i, group) in data.iter().enumerate() {
-        if group.is_empty() {
+        let g = group.as_ref();
+        if g.is_empty() {
             return Err(TukeyError::EmptyGroup(i));
         }
-        let n = group.len();
-        let s: f64 = group.iter().sum();
+        let n = g.len();
+        let s: f64 = g.iter().sum();
         group_sizes.push(n);
         group_means.push(s / n as f64);
         n_total += n;
@@ -891,7 +911,7 @@ pub fn one_way_anova(data: &[Vec<f64>]) -> Result<AnovaResult, TukeyError> {
     let mut ss_within = 0.0;
     for (i, group) in data.iter().enumerate() {
         let mean = group_means[i];
-        for &x in group {
+        for &x in group.as_ref() {
             ss_within += (x - mean).powi(2);
         }
     }
@@ -948,7 +968,7 @@ pub fn one_way_anova(data: &[Vec<f64>]) -> Result<AnovaResult, TukeyError> {
 /// let result = games_howell(&data, 0.05).unwrap();
 /// assert!(!result.significant_pairs().is_empty());
 /// ```
-pub fn games_howell(data: &[Vec<f64>], alpha: f64) -> Result<GamesHowellResult, TukeyError> {
+pub fn games_howell<T: AsRef<[f64]>>(data: &[T], alpha: f64) -> Result<GamesHowellResult, TukeyError> {
     let k = data.len();
     if k < 2 {
         return Err(TukeyError::TooFewGroups);
@@ -962,12 +982,13 @@ pub fn games_howell(data: &[Vec<f64>], alpha: f64) -> Result<GamesHowellResult, 
     let mut group_variances = Vec::with_capacity(k);
 
     for (i, group) in data.iter().enumerate() {
-        let n = group.len();
+        let g = group.as_ref();
+        let n = g.len();
         if n < 2 {
             return Err(TukeyError::GroupTooSmall(i));
         }
-        let mean = group.iter().sum::<f64>() / n as f64;
-        let var = group.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / (n - 1) as f64;
+        let mean = g.iter().sum::<f64>() / n as f64;
+        let var = g.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / (n - 1) as f64;
         group_means.push(mean);
         group_sizes.push(n);
         group_variances.push(var);
@@ -1033,7 +1054,7 @@ pub fn games_howell(data: &[Vec<f64>], alpha: f64) -> Result<GamesHowellResult, 
 /// control group.
 ///
 /// # Arguments
-/// * `data` — slice of groups, each group a `Vec<f64>` of observations
+/// * `data` — slice of groups; each group can be any type implementing `AsRef<[f64]>`
 /// * `control` — index of the control group (usually 0)
 /// * `alpha` — significance level (0.05 or 0.01)
 ///
@@ -1049,7 +1070,7 @@ pub fn games_howell(data: &[Vec<f64>], alpha: f64) -> Result<GamesHowellResult, 
 /// let result = dunnett(&data, 0, 0.05).unwrap();
 /// assert!(!result.significant_treatments().is_empty());
 /// ```
-pub fn dunnett(data: &[Vec<f64>], control: usize, alpha: f64) -> Result<DunnettResult, TukeyError> {
+pub fn dunnett<T: AsRef<[f64]>>(data: &[T], control: usize, alpha: f64) -> Result<DunnettResult, TukeyError> {
     let k = data.len();
     if k < 2 {
         return Err(TukeyError::TooFewGroups);
@@ -1067,13 +1088,14 @@ pub fn dunnett(data: &[Vec<f64>], control: usize, alpha: f64) -> Result<DunnettR
     let mut n_total: usize = 0;
 
     for (i, group) in data.iter().enumerate() {
-        if group.is_empty() {
+        let g = group.as_ref();
+        if g.is_empty() {
             return Err(TukeyError::EmptyGroup(i));
         }
-        let n = group.len();
+        let n = g.len();
         group_sizes.push(n);
         n_total += n;
-        group_means.push(group.iter().sum::<f64>() / n as f64);
+        group_means.push(g.iter().sum::<f64>() / n as f64);
     }
 
     let df = n_total - k;
@@ -1085,7 +1107,7 @@ pub fn dunnett(data: &[Vec<f64>], control: usize, alpha: f64) -> Result<DunnettR
     let mut ss_within = 0.0;
     for (i, group) in data.iter().enumerate() {
         let mean = group_means[i];
-        for &x in group {
+        for &x in group.as_ref() {
             ss_within += (x - mean).powi(2);
         }
     }
@@ -1134,6 +1156,101 @@ pub fn dunnett(data: &[Vec<f64>], control: usize, alpha: f64) -> Result<DunnettR
         group_sizes,
         comparisons,
     })
+}
+
+// ---------------------------------------------------------------------------
+// CSV parsing
+// ---------------------------------------------------------------------------
+
+/// Parse CSV data in wide format (each column is a group).
+///
+/// Reads from any `std::io::Read` source — files, stdin, byte slices, etc.
+/// The first row is treated as a header and skipped if any cell is not a valid
+/// number. Columns may have unequal lengths (ragged data). Empty cells and
+/// trailing commas are ignored.
+///
+/// # Example
+///
+/// ```
+/// use tukey_test::parse_csv;
+///
+/// let csv = "control,treatment_a,treatment_b\n10,15,11\n12,17,13\n11,14,10\n";
+/// let groups = parse_csv(csv.as_bytes()).unwrap();
+/// assert_eq!(groups.len(), 3);
+/// assert_eq!(groups[0], vec![10.0, 12.0, 11.0]);
+/// ```
+pub fn parse_csv<R: io::Read>(reader: R) -> Result<Vec<Vec<f64>>, TukeyError> {
+    let content = {
+        let mut buf = String::new();
+        let mut r = reader;
+        r.read_to_string(&mut buf)
+            .map_err(|e| TukeyError::IoError(e.to_string()))?;
+        buf
+    };
+
+    let mut lines = content.lines().peekable();
+    let first_line = match lines.peek() {
+        Some(line) => *line,
+        None => return Err(TukeyError::EmptyCsv),
+    };
+
+    // Detect number of columns from first row
+    let first_cells: Vec<&str> = first_line.split(',').collect();
+    let num_cols = first_cells.len();
+    if num_cols == 0 {
+        return Err(TukeyError::EmptyCsv);
+    }
+
+    // Check if first row is a header (any cell fails to parse as f64)
+    let is_header = first_cells.iter().any(|c| c.trim().parse::<f64>().is_err());
+    if is_header {
+        lines.next(); // skip header
+    }
+
+    let mut groups: Vec<Vec<f64>> = vec![Vec::new(); num_cols];
+
+    for (line_idx, line) in lines.enumerate() {
+        let line_num = if is_header { line_idx + 2 } else { line_idx + 1 };
+        for (col, cell) in line.split(',').enumerate() {
+            if col >= num_cols {
+                break; // ignore extra columns
+            }
+            let trimmed = cell.trim();
+            if trimmed.is_empty() {
+                continue; // skip empty cells (ragged data)
+            }
+            let val: f64 = trimmed.parse().map_err(|_| TukeyError::ParseError {
+                line: line_num,
+                column: col + 1,
+                value: trimmed.to_string(),
+            })?;
+            groups[col].push(val);
+        }
+    }
+
+    // Remove any completely empty columns
+    groups.retain(|g| !g.is_empty());
+
+    if groups.is_empty() {
+        return Err(TukeyError::EmptyCsv);
+    }
+
+    Ok(groups)
+}
+
+/// Convenience wrapper: parse CSV from a file path.
+///
+/// # Example
+///
+/// ```no_run
+/// use tukey_test::parse_csv_file;
+///
+/// let groups = parse_csv_file("data.csv").unwrap();
+/// ```
+pub fn parse_csv_file(path: &str) -> Result<Vec<Vec<f64>>, TukeyError> {
+    let file = std::fs::File::open(path)
+        .map_err(|e| TukeyError::IoError(format!("{path}: {e}")))?;
+    parse_csv(io::BufReader::new(file))
 }
 
 // ---------------------------------------------------------------------------
@@ -1409,5 +1526,79 @@ mod tests {
             dunnett(&data, 5, 0.05).unwrap_err(),
             TukeyError::ControlGroupOutOfRange(5)
         );
+    }
+
+    // --- Generic input tests ---
+
+    #[test]
+    fn accepts_slice_refs() {
+        let data: &[&[f64]] = &[
+            &[6.0, 8.0, 4.0, 5.0, 3.0, 4.0],
+            &[8.0, 12.0, 9.0, 11.0, 6.0, 8.0],
+            &[13.0, 9.0, 11.0, 8.0, 12.0, 14.0],
+        ];
+        let r = tukey_hsd(data, 0.05).unwrap();
+        assert_eq!(r.groups, 3);
+
+        let a = one_way_anova(data).unwrap();
+        assert!(a.p_value < 0.05);
+
+        let g = games_howell(data, 0.05).unwrap();
+        assert_eq!(g.comparisons.len(), 3);
+
+        let d = dunnett(data, 0, 0.05).unwrap();
+        assert_eq!(d.comparisons.len(), 2);
+    }
+
+    #[test]
+    fn accepts_fixed_arrays() {
+        let data = [
+            [1.0, 2.0, 3.0, 4.0],
+            [5.0, 6.0, 7.0, 8.0],
+        ];
+        let r = one_way_anova(&data).unwrap();
+        assert!(r.p_value < 0.05);
+    }
+
+    // --- CSV parsing tests ---
+
+    #[test]
+    fn parse_csv_with_header() {
+        let csv = "a,b,c\n1,4,7\n2,5,8\n3,6,9\n";
+        let groups = parse_csv(csv.as_bytes()).unwrap();
+        assert_eq!(groups.len(), 3);
+        assert_eq!(groups[0], vec![1.0, 2.0, 3.0]);
+        assert_eq!(groups[1], vec![4.0, 5.0, 6.0]);
+        assert_eq!(groups[2], vec![7.0, 8.0, 9.0]);
+    }
+
+    #[test]
+    fn parse_csv_no_header() {
+        let csv = "1,4,7\n2,5,8\n3,6,9\n";
+        let groups = parse_csv(csv.as_bytes()).unwrap();
+        assert_eq!(groups.len(), 3);
+        assert_eq!(groups[0], vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn parse_csv_ragged() {
+        let csv = "a,b\n1,4\n2,5\n3,\n";
+        let groups = parse_csv(csv.as_bytes()).unwrap();
+        assert_eq!(groups[0], vec![1.0, 2.0, 3.0]);
+        assert_eq!(groups[1], vec![4.0, 5.0]); // shorter column
+    }
+
+    #[test]
+    fn parse_csv_into_test() {
+        let csv = "control,treatment\n10,15\n12,17\n11,14\n9,16\n10,15\n";
+        let groups = parse_csv(csv.as_bytes()).unwrap();
+        let result = tukey_hsd(&groups, 0.05).unwrap();
+        assert_eq!(result.groups, 2);
+    }
+
+    #[test]
+    fn parse_csv_errors() {
+        assert!(parse_csv("".as_bytes()).is_err()); // empty
+        assert!(parse_csv("a,b\n1,foo\n".as_bytes()).is_err()); // bad value
     }
 }

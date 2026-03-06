@@ -1,5 +1,5 @@
 <p align="center">
-  <h1 align="center">tukey-test</h1>
+  <h1 align="center">tukey_test</h1>
   <p align="center">
     <strong>Statistical post-hoc testing for Rust</strong>
   </p>
@@ -7,19 +7,19 @@
     Pure Rust &bull; Zero required dependencies &bull; No unsafe code
   </p>
   <p align="center">
-    <a href="https://crates.io/crates/tukey-test"><img src="https://img.shields.io/crates/v/tukey-test.svg" alt="crates.io"></a>
-    <a href="https://docs.rs/tukey-test"><img src="https://img.shields.io/docsrs/tukey-test" alt="docs.rs"></a>
-    <a href="https://github.com/TechieTeee/Rust_Tukey_Test/blob/main/LICENSE"><img src="https://img.shields.io/crates/l/tukey-test.svg" alt="MIT License"></a>
+    <a href="https://crates.io/crates/tukey_test"><img src="https://img.shields.io/crates/v/tukey_test.svg" alt="crates.io"></a>
+    <a href="https://docs.rs/tukey_test"><img src="https://img.shields.io/docsrs/tukey_test" alt="docs.rs"></a>
+    <a href="https://github.com/TechieTeee/Rust_Tukey_Test/blob/main/LICENSE"><img src="https://img.shields.io/crates/l/tukey_test.svg" alt="MIT License"></a>
   </p>
 </p>
 
 ---
 
-## Why tukey-test?
+## Why tukey_test?
 
 Rust's ecosystem for data science is growing fast — but access to foundational statistical tests has lagged behind R and Python. Researchers, engineers, and analysts working in Rust shouldn't have to shell out to another language just to answer: *"which groups are actually different?"*
 
-`tukey-test` brings that capability natively to Rust. It's lightweight, correct, and designed to drop into existing data pipelines — whether you're running clinical trials, optimizing manufacturing processes, analyzing A/B tests, or building research tools.
+`tukey_test` brings that capability natively to Rust. It's lightweight, correct, and designed to drop into existing data pipelines — whether you're running clinical trials, optimizing manufacturing processes, analyzing A/B tests, or building research tools.
 
 > **ANOVA tells you *something* differs. Post-hoc tests tell you *what*.**
 
@@ -46,7 +46,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-tukey-test = "0.2"
+tukey_test = "0.2"
 ```
 
 ### ANOVA + Tukey HSD
@@ -108,6 +108,56 @@ for t in result.significant_treatments() {
 
 ---
 
+## Data Input
+
+### Flexible types in the library
+
+All test functions accept any type implementing `AsRef<[f64]>` for groups — no need to convert into `Vec<Vec<f64>>`:
+
+```rust
+use tukey_test::one_way_anova;
+
+// Slices
+let data: &[&[f64]] = &[&[1.0, 2.0, 3.0], &[4.0, 5.0, 6.0]];
+one_way_anova(data).unwrap();
+
+// Fixed-size arrays
+let data = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]];
+one_way_anova(&data).unwrap();
+```
+
+### Load from CSV
+
+Read data from CSV files in **wide format** (each column is a group). Headers are auto-detected and skipped. Columns can have unequal lengths.
+
+```
+control,treatment_a,treatment_b
+10,15,11
+12,17,13
+11,14,10
+9,16,12
+10,15,11
+```
+
+```rust
+use tukey_test::{parse_csv_file, tukey_hsd};
+
+let groups = parse_csv_file("experiment.csv").unwrap();
+let result = tukey_hsd(&groups, 0.05).unwrap();
+println!("{result}");
+```
+
+You can also parse from any `std::io::Read` source:
+
+```rust
+use tukey_test::parse_csv;
+
+let csv_data = "a,b\n1,4\n2,5\n3,6\n";
+let groups = parse_csv(csv_data.as_bytes()).unwrap();
+```
+
+---
+
 ## Optional Features
 
 ### Serde
@@ -116,14 +166,14 @@ Serialize any result to JSON, CSV, or any serde-supported format:
 
 ```toml
 [dependencies]
-tukey-test = { version = "0.2", features = ["serde"] }
+tukey_test = { version = "0.2", features = ["serde"] }
 ```
 
 ---
 
 ## CLI
 
-The crate also ships as a command-line tool. Groups are separated by `--`.
+The crate also ships as a command-line tool.
 
 ```sh
 git clone https://github.com/TechieTeee/Rust_Tukey_Test.git
@@ -131,23 +181,40 @@ cd Rust_Tukey_Test
 cargo build --release
 ```
 
+### Data input options
+
+```sh
+# Inline — separate groups with --
+tukey_test hsd 0.05 6 8 4 5 3 4 -- 8 12 9 11 6 8 -- 13 9 11 8 12 14
+
+# From a CSV file
+tukey_test hsd 0.05 --file experiment.csv
+
+# From stdin (pipe-friendly)
+cat data.csv | tukey_test hsd 0.05 --file -
+```
+
 ### Commands
 
 ```sh
 # One-way ANOVA
-tukey-test anova 6 8 4 5 3 4 -- 8 12 9 11 6 8 -- 13 9 11 8 12 14
+tukey_test anova 6 8 4 5 3 4 -- 8 12 9 11 6 8 -- 13 9 11 8 12 14
+tukey_test anova --file data.csv
 
 # Tukey HSD (alpha = 0.05)
-tukey-test hsd 0.05 6 8 4 5 3 4 -- 8 12 9 11 6 8 -- 13 9 11 8 12 14
+tukey_test hsd 0.05 6 8 4 5 3 4 -- 8 12 9 11 6 8 -- 13 9 11 8 12 14
+tukey_test hsd 0.05 --file data.csv
 
 # Games-Howell (alpha = 0.05)
-tukey-test games-howell 0.05 4 5 3 4 6 -- 20 30 25 35 28 -- 5 7 6 4 5
+tukey_test games-howell 0.05 4 5 3 4 6 -- 20 30 25 35 28 -- 5 7 6 4 5
+tukey_test games-howell 0.05 --file data.csv
 
 # Dunnett (alpha = 0.05, control = group 0)
-tukey-test dunnett 0.05 0 10 12 11 9 10 -- 15 17 14 16 15 -- 11 13 10 12 11
+tukey_test dunnett 0.05 0 10 12 11 9 10 -- 15 17 14 16 15 -- 11 13 10 12 11
+tukey_test dunnett 0.05 0 --file data.csv
 
 # Critical value lookup
-tukey-test q 3 15 0.05
+tukey_test q 3 15 0.05
 ```
 
 ### Example Output
@@ -187,16 +254,16 @@ Group  2 vs  0        1.0000     1.3868           No   [-0.7162, 2.7162]
 
 ```
   Got multiple groups to compare?
-  │
-  ├── Start with one_way_anova()
-  │   p < 0.05? → significant overall difference
-  │
-  ├── Want all pairwise comparisons?
-  │   ├── Equal variances? → tukey_hsd()
-  │   └── Unequal variances? → games_howell()
-  │
-  └── Comparing treatments to a control?
-      └── dunnett()
+  |
+  |-- Start with one_way_anova()
+  |   p < 0.05? --> significant overall difference
+  |
+  |-- Want all pairwise comparisons?
+  |   |-- Equal variances?   --> tukey_hsd()
+  |   +-- Unequal variances? --> games_howell()
+  |
+  +-- Comparing treatments to a control?
+      +-- dunnett()
 ```
 
 ---
@@ -205,7 +272,7 @@ Group  2 vs  0        1.0000     1.3868           No   [-0.7162, 2.7162]
 
 This crate aims to be the go-to resource for post-hoc and related statistical tests in Rust. Future plans include:
 
-- **Scheffé's test** — the most conservative post-hoc test, for complex contrasts
+- **Scheffe's test** — the most conservative post-hoc test, for complex contrasts
 - **Bonferroni / Holm corrections** — general-purpose p-value adjustment for multiple comparisons
 - **Levene's test** — test for equality of variances (helps choose between Tukey and Games-Howell)
 - **Welch's ANOVA** — one-way ANOVA without equal variance assumption
