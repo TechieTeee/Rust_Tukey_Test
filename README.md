@@ -43,9 +43,37 @@ You're comparing three drug dosages, five marketing campaigns, or four manufactu
 
 ## Why Rust?
 
-Rust's ecosystem for data science is growing fast — but access to foundational statistical tests has lagged behind R and Python. Researchers, engineers, and analysts working in Rust shouldn't have to shell out to another language just to answer: *"which groups are actually different?"*
+Rust has been ranked the **most admired programming language** in the Stack Overflow Developer Survey for nine consecutive years (2016–2024). Developer adoption is accelerating — Rust is now used in the Linux kernel, the Windows kernel, the Android platform, and major infrastructure at AWS, Microsoft, Google, and Meta. It is no longer a niche systems language; it is becoming the default choice for any new software where correctness, performance, and long-term maintainability matter.
 
-`tukey_test` brings that capability natively to Rust. It's lightweight, correct, and designed to drop into existing data pipelines. Zero required dependencies. No unsafe code. Just add it to your `Cargo.toml` and go.
+The statistical computing ecosystem hasn't kept up. `tukey_test` is part of closing that gap.
+
+---
+
+R, Python, and Mathematica are great for interactive analysis in a notebook. But when you're **building something that runs statistical tests in production** — a clinical trial pipeline, a manufacturing quality system, a real-time A/B testing platform — those tools create serious problems:
+
+- You have to shell out to another language mid-pipeline, adding subprocess overhead, serialization, and a fragile runtime dependency
+- Python and R's numerical output can vary by OS, version, and BLAS library — meaning results on your laptop may not match production
+- Deploying a Python + scipy + numpy stack (or an R environment) on edge hardware, in Docker, or in WebAssembly is genuinely painful
+
+**This is the gap `tukey_test` fills.** Post-hoc statistical tests have essentially zero native Rust coverage. If you needed Tukey HSD in a Rust service today, your options were: reimplement it yourself, shell out to R, or change languages. None of those are acceptable in a serious production codebase.
+
+### Four reasons this matters
+
+**1. Correctness you can trust**
+Rust's type system and borrow checker eliminate whole categories of bugs — buffer overruns, data races, silent memory corruption — that have caused real errors in scientific software. Reproducibility is a well-documented crisis in research. A statistically correct implementation that *cannot silently corrupt memory* is a different class of software than a Python script that happens to produce the right answer most of the time.
+
+**2. Deterministic results everywhere**
+Rust produces bit-for-bit identical output across platforms and operating systems. For auditable systems — FDA regulatory submissions, financial reporting, clinical trial analysis — that determinism is not a nice-to-have, it's a requirement. R and Python cannot make that guarantee.
+
+**3. Zero-overhead integration**
+A Rust service can call `tukey_hsd()` directly in the same process, with no FFI, no subprocess, no round-trip serialization. For high-frequency data processing or embedded applications — real-time sensor analysis, manufacturing QC on the line — that's the difference between feasible and not.
+
+**4. Simple, self-contained deployment**
+A Rust binary with zero required dependencies ships as a single executable. No runtime to install, no package manager to invoke, no version conflicts. Compare that to deploying a full R or Python scientific stack on edge hardware or in a serverless function.
+
+### Who this is for
+
+The intended user is not a statistician choosing between tools for a one-off analysis — use R or Python for that. This crate is for the **Rust engineer** who already knows what statistical test they need and is now building the system that runs it reliably, repeatedly, and at scale. That person has had no good option until now.
 
 ---
 
@@ -57,10 +85,14 @@ Rust's ecosystem for data science is growing fast — but access to foundational
 | **Tukey HSD** | All pairwise comparisons (equal variances) | `tukey_hsd()` |
 | **Games-Howell** | All pairwise comparisons (unequal variances) | `games_howell()` |
 | **Dunnett's test** | Compare treatments against a single control | `dunnett()` |
+| **Levene's test** | Test equality of variances (Brown-Forsythe variant) | `levene_test()` |
 | **q critical value** | Studentized range distribution lookup | `q_critical()` |
 | **Dunnett critical value** | Dunnett distribution lookup | `dunnett_critical()` |
+| **Studentized range CDF** | Exact p-values for post-hoc tests | `ptukey_cdf()` |
 
 All tests support **unequal group sizes**. Tukey HSD applies the Tukey-Kramer adjustment automatically.
+
+All pairwise comparison results include an exact **p-value** computed via `ptukey_cdf`. ANOVA results include **η²** (eta-squared) and **ω²** (omega-squared) effect sizes. `q_critical` supports any α and any number of groups k (not limited to the table range).
 
 ---
 
@@ -128,6 +160,56 @@ for t in result.significant_treatments() {
     println!("Treatment {} differs from control (t = {:.4})",
         t.treatment, t.t_statistic);
 }
+```
+
+### Levene's test — check variance equality before choosing Tukey vs Games-Howell
+
+```rust
+use tukey_test::levene_test;
+
+let data = vec![
+    vec![5.0, 6.0, 5.5, 5.2, 5.8],   // group A (low variance)
+    vec![1.0, 9.0, 3.0, 8.0, 5.0],   // group B (high variance)
+];
+let result = levene_test(&data, 0.05).unwrap();
+if result.significant {
+    println!("Unequal variances detected — use games_howell()");
+} else {
+    println!("Variances are homogeneous — tukey_hsd() is appropriate");
+}
+```
+
+### Exact p-values and effect sizes
+
+Every pairwise comparison result includes an exact **p-value** computed via the studentized range CDF:
+
+```rust
+use tukey_test::tukey_hsd;
+
+let data = vec![
+    vec![6.0, 8.0, 4.0, 5.0, 3.0, 4.0],
+    vec![8.0, 12.0, 9.0, 11.0, 6.0, 8.0],
+    vec![13.0, 9.0, 11.0, 8.0, 12.0, 14.0],
+];
+let result = tukey_hsd(&data, 0.05).unwrap();
+for pair in &result.comparisons {
+    println!("Groups ({}, {}): p = {:.4}", pair.group_i, pair.group_j, pair.p_value);
+}
+```
+
+ANOVA results include **η²** (eta-squared) and **ω²** (omega-squared) for practical effect size:
+
+```rust
+use tukey_test::one_way_anova;
+
+let data = vec![
+    vec![6.0, 8.0, 4.0, 5.0, 3.0, 4.0],
+    vec![8.0, 12.0, 9.0, 11.0, 6.0, 8.0],
+    vec![13.0, 9.0, 11.0, 8.0, 12.0, 14.0],
+];
+let result = one_way_anova(&data).unwrap();
+println!("η² = {:.3}, ω² = {:.3}", result.eta_squared, result.omega_squared);
+// η² = 0.637, ω² = 0.589
 ```
 
 ---
@@ -281,10 +363,15 @@ Group  2 vs  0        1.0000     1.3868           No   [-0.7162, 2.7162]
   |
   |-- Start with one_way_anova()
   |   p < 0.05? --> significant overall difference
+  |   eta_squared / omega_squared --> practical effect size
   |
   |-- Want all pairwise comparisons?
-  |   |-- Equal variances?   --> tukey_hsd()
-  |   +-- Unequal variances? --> games_howell()
+  |   |
+  |   |-- Check variances first: levene_test()
+  |   |   |-- Not significant (homogeneous)? --> tukey_hsd()
+  |   |   +-- Significant (unequal)?         --> games_howell()
+  |   |
+  |   +-- All pairwise results include exact p-values
   |
   +-- Comparing treatments to a control?
       +-- dunnett()
@@ -298,10 +385,14 @@ This crate aims to be the go-to resource for post-hoc and related statistical te
 
 - **Scheffe's test** — the most conservative post-hoc test, for complex contrasts
 - **Bonferroni / Holm corrections** — general-purpose p-value adjustment for multiple comparisons
-- **Levene's test** — test for equality of variances (helps choose between Tukey and Games-Howell)
 - **Welch's ANOVA** — one-way ANOVA without equal variance assumption
-- **Effect sizes** — Cohen's d, eta-squared, omega-squared for practical significance
-- **Numerical q-distribution** — continuous p-value computation beyond table lookup
+- **Cohen's d** — pairwise effect size for individual comparisons
+- **Dunnett's test for any k/df** — remove table-based limits via numerical multivariate-t integration (currently requires df ≥ 5 and k ≤ 9)
+- **Games-Howell non-integer df** — fix Welch-Satterthwaite df truncation for more accurate p-values at small sample sizes
+- **`ptukey_cdf` extended validation** — comprehensive accuracy benchmarks against R across the full (k, df, q) grid, especially for k > 20 and df < 5
+- **`no_std` / `f32` support** — for embedded and WASM scientific computing targets
+
+These items are targeted for **0.3.0**.
 
 Contributions, feature requests, and bug reports are welcome!
 

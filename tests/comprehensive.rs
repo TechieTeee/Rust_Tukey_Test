@@ -366,12 +366,13 @@ fn maximum_groups_k10() {
 }
 
 #[test]
-fn k11_errors() {
+fn k11_now_works() {
+    // k > 10 is now supported via numerical q_critical — no longer an error
     let data: Vec<Vec<f64>> = (0..11)
-        .map(|i| vec![i as f64, i as f64 + 1.0])
+        .map(|i| vec![i as f64 * 10.0, i as f64 * 10.0 + 1.0, i as f64 * 10.0 + 2.0])
         .collect();
-    assert!(tukey_hsd(&data, 0.05).is_err());
-    assert!(games_howell(&data, 0.05).is_err());
+    assert!(tukey_hsd(&data, 0.05).is_ok());
+    assert!(games_howell(&data, 0.05).is_ok());
 }
 
 #[test]
@@ -878,4 +879,174 @@ fn swapping_groups_preserves_mean_diff() {
     assert!((r1.comparisons[0].mean_diff - r2.comparisons[0].mean_diff).abs() < 1e-10);
     // But CI should flip sign
     assert!((r1.comparisons[0].ci_lower + r2.comparisons[0].ci_upper).abs() < 1e-10);
+}
+
+// ===========================================================================
+// NEW: ptukey_cdf, p-values, effect sizes, levene_test
+// ===========================================================================
+
+#[test]
+fn ptukey_cdf_validated_against_r() {
+    // Reference values from R: ptukey(q, nmeans=k, df=df, lower.tail=TRUE)
+    // ptukey(4.34, 3, 6)  ≈ 0.9500
+    // ptukey(3.77, 3, 12) ≈ 0.9500
+    // ptukey(2.80, 2, 120) ≈ 0.9500
+    let cases = [
+        (4.34, 3, 6,   0.95, 0.01),
+        (3.77, 3, 12,  0.95, 0.01),
+        (2.80, 2, 120, 0.95, 0.01),
+        (0.0,  3, 10,  0.0,  1e-10), // q=0 → CDF=0
+    ];
+    for (q, k, df, expected, tol) in cases {
+        let got = ptukey_cdf(q, k, df);
+        assert!(
+            (got - expected).abs() < tol,
+            "ptukey_cdf({q}, {k}, {df}) = {got:.6}, expected {expected:.6}"
+        );
+    }
+}
+
+#[test]
+fn ptukey_cdf_is_monotone_in_q() {
+    for k in [2, 3, 5] {
+        for df in [5, 10, 30] {
+            let mut prev = 0.0_f64;
+            for qi in 1..=20 {
+                let q = qi as f64 * 0.5;
+                let cdf = ptukey_cdf(q, k, df);
+                assert!(cdf >= prev, "ptukey_cdf not monotone: q={q}, k={k}, df={df}");
+                prev = cdf;
+            }
+        }
+    }
+}
+
+#[test]
+fn p_value_in_comparisons() {
+    let data = vec![
+        vec![4.0, 5.0, 6.0],
+        vec![8.0, 9.0, 10.0],
+        vec![5.0, 6.0, 7.0],
+    ];
+    let r = tukey_hsd(&data, 0.05).unwrap();
+    for c in &r.comparisons {
+        assert!(c.p_value >= 0.0 && c.p_value <= 1.0,
+            "p_value out of range: {}", c.p_value);
+    }
+    // A vs B is clearly significant — p should be small
+    assert!(r.comparisons[0].p_value < 0.05,
+        "A vs B should be significant, got p={}", r.comparisons[0].p_value);
+    // A vs C is not significant — p should be large
+    assert!(r.comparisons[1].p_value > 0.05,
+        "A vs C should not be significant, got p={}", r.comparisons[1].p_value);
+}
+
+#[test]
+fn p_value_consistent_with_significant_flag() {
+    let data = vec![
+        vec![6.0, 8.0, 4.0, 5.0, 3.0, 4.0],
+        vec![8.0, 12.0, 9.0, 11.0, 6.0, 8.0],
+        vec![13.0, 9.0, 11.0, 8.0, 12.0, 14.0],
+    ];
+    let r = tukey_hsd(&data, 0.05).unwrap();
+    for c in &r.comparisons {
+        if c.significant {
+            assert!(c.p_value < 0.05, "significant but p={}", c.p_value);
+        } else {
+            assert!(c.p_value >= 0.05, "not significant but p={}", c.p_value);
+        }
+    }
+}
+
+#[test]
+fn effect_sizes_bounds() {
+    let data = vec![
+        vec![6.0, 8.0, 4.0, 5.0, 3.0, 4.0],
+        vec![8.0, 12.0, 9.0, 11.0, 6.0, 8.0],
+        vec![13.0, 9.0, 11.0, 8.0, 12.0, 14.0],
+    ];
+    let r = one_way_anova(&data).unwrap();
+    assert!(r.eta_squared >= 0.0 && r.eta_squared <= 1.0,
+        "eta_squared out of range: {}", r.eta_squared);
+    assert!(r.omega_squared >= 0.0 && r.omega_squared <= 1.0,
+        "omega_squared out of range: {}", r.omega_squared);
+    // eta² >= omega² always
+    assert!(r.eta_squared >= r.omega_squared);
+    // For a clearly significant result, effect sizes should be substantial
+    assert!(r.eta_squared > 0.3, "eta_squared should be large: {}", r.eta_squared);
+}
+
+#[test]
+fn effect_sizes_near_zero_for_null_data() {
+    let data = vec![
+        vec![10.0, 11.0, 9.0],
+        vec![10.0, 9.0, 11.0],
+        vec![11.0, 10.0, 9.0],
+    ];
+    let r = one_way_anova(&data).unwrap();
+    assert!(r.eta_squared < 0.1, "eta_squared should be tiny: {}", r.eta_squared);
+    assert_eq!(r.omega_squared, 0.0, "omega_squared should be clamped to 0");
+}
+
+#[test]
+fn levene_detects_unequal_variances() {
+    let data = vec![
+        vec![1.0, 2.0, 3.0, 2.0, 1.0],          // low variance
+        vec![1.0, 100.0, 50.0, 75.0, 25.0],       // high variance
+    ];
+    let r = levene_test(&data, 0.05).unwrap();
+    assert!(r.significant, "Levene should detect unequal variances");
+    assert!(r.p_value < 0.05);
+    assert!(r.f_statistic > 1.0);
+}
+
+#[test]
+fn levene_accepts_equal_variances() {
+    // Identical structure in both groups — Levene should not reject
+    let data = vec![
+        vec![1.0, 2.0, 3.0, 4.0, 5.0],
+        vec![11.0, 12.0, 13.0, 14.0, 15.0],
+    ];
+    let r = levene_test(&data, 0.05).unwrap();
+    assert!(!r.significant, "Levene should accept equal variances, got p={}", r.p_value);
+}
+
+#[test]
+fn levene_errors_on_small_groups() {
+    let data = vec![vec![1.0], vec![2.0, 3.0]];
+    assert!(levene_test(&data, 0.05).is_err());
+}
+
+#[test]
+fn q_critical_any_alpha() {
+    // Numerical path: alpha other than 0.05/0.01
+    let q_10 = q_critical(3, 10, 0.10).unwrap();
+    let q_05 = q_critical(3, 10, 0.05).unwrap();
+    let q_01 = q_critical(3, 10, 0.01).unwrap();
+    assert!(q_10 < q_05, "α=0.10 critical value should be less than α=0.05");
+    assert!(q_05 < q_01, "α=0.05 critical value should be less than α=0.01");
+}
+
+#[test]
+fn q_critical_k_greater_than_10() {
+    // Numerical path: k > 10
+    let q_10 = q_critical(10, 20, 0.05).unwrap();
+    let q_11 = q_critical(11, 20, 0.05).unwrap();
+    let q_15 = q_critical(15, 20, 0.05).unwrap();
+    // Critical value should increase with more groups
+    assert!(q_11 > q_10, "q_critical should increase with k");
+    assert!(q_15 > q_11, "q_critical should increase with k");
+}
+
+#[test]
+fn tukey_hsd_k_greater_than_10() {
+    let data: Vec<Vec<f64>> = (0..12)
+        .map(|i| vec![i as f64 * 10.0, i as f64 * 10.0 + 1.0, i as f64 * 10.0 + 2.0])
+        .collect();
+    let r = tukey_hsd(&data, 0.05).unwrap();
+    assert_eq!(r.groups, 12);
+    assert_eq!(r.comparisons.len(), 66); // C(12,2)
+    for c in &r.comparisons {
+        assert!(c.p_value >= 0.0 && c.p_value <= 1.0);
+    }
 }

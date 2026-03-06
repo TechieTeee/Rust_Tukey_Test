@@ -1,11 +1,13 @@
 //! Statistical tests for pairwise group comparisons.
 //!
 //! This crate provides:
-//! - [`one_way_anova`] — one-way analysis of variance (F-test)
-//! - [`tukey_hsd`] — Tukey HSD test (assumes equal variances)
-//! - [`games_howell`] — Games-Howell test (does **not** assume equal variances)
+//! - [`one_way_anova`] — one-way analysis of variance (F-test) with η²/ω² effect sizes
+//! - [`tukey_hsd`] — Tukey HSD test (assumes equal variances); any k ≥ 2
+//! - [`games_howell`] — Games-Howell test (does **not** assume equal variances); any k ≥ 2
 //! - [`dunnett`] — Dunnett's test (compare treatments against a control)
-//! - [`q_critical`] — studentized range distribution critical value lookup
+//! - [`levene_test`] — Brown-Forsythe/Levene test for equality of variances
+//! - [`ptukey_cdf`] — exact CDF of the studentized range distribution
+//! - [`q_critical`] — critical value lookup (any k ≥ 2, any alpha ∈ (0, 1))
 //! - [`dunnett_critical`] — Dunnett's critical value lookup
 //! - [`parse_csv`] — load grouped data from CSV (wide format)
 //!
@@ -147,6 +149,10 @@ pub struct AnovaResult {
     pub group_means: Vec<f64>,
     /// Number of observations in each group.
     pub group_sizes: Vec<usize>,
+    /// Eta-squared (η²): proportion of total variance explained (SS_between / SS_total).
+    pub eta_squared: f64,
+    /// Omega-squared (ω²): less-biased effect size estimate.
+    pub omega_squared: f64,
 }
 
 impl fmt::Display for AnovaResult {
@@ -174,6 +180,8 @@ impl fmt::Display for AnovaResult {
             "{:<14} {:>10.4} {:>6}",
             "Total", self.ss_total, self.df_total
         )?;
+        writeln!(f)?;
+        writeln!(f, "Effect sizes:  η² = {:.4},  ω² = {:.4}", self.eta_squared, self.omega_squared)?;
         Ok(())
     }
 }
@@ -194,6 +202,8 @@ pub struct PairwiseComparison {
     pub mean_diff: f64,
     /// Observed q statistic for this pair.
     pub q_statistic: f64,
+    /// Two-tailed p-value from the studentized range distribution.
+    pub p_value: f64,
     /// Whether the difference is statistically significant at the chosen alpha.
     pub significant: bool,
     /// Lower bound of the confidence interval for (mean_i − mean_j).
@@ -242,18 +252,19 @@ impl fmt::Display for TukeyResult {
         writeln!(f)?;
         writeln!(
             f,
-            "{:<14} {:>10} {:>10} {:>12}   {}",
-            "Comparison", "Mean Diff", "q-stat", "Significant", "CI"
+            "{:<14} {:>10} {:>10} {:>8} {:>12}   {}",
+            "Comparison", "Mean Diff", "q-stat", "p-value", "Significant", "CI"
         )?;
-        writeln!(f, "{}", "-".repeat(72))?;
+        writeln!(f, "{}", "-".repeat(80))?;
         for c in &self.comparisons {
             writeln!(
                 f,
-                "({:>2}, {:>2})       {:>10.4} {:>10.4} {:>12}   [{:.4}, {:.4}]",
+                "({:>2}, {:>2})       {:>10.4} {:>10.4} {:>8.4} {:>12}   [{:.4}, {:.4}]",
                 c.group_i,
                 c.group_j,
                 c.mean_diff,
                 c.q_statistic,
+                c.p_value,
                 if c.significant { "Yes" } else { "No" },
                 c.ci_lower,
                 c.ci_upper
@@ -295,21 +306,19 @@ impl fmt::Display for GamesHowellResult {
         writeln!(f)?;
         writeln!(
             f,
-            "{:<14} {:>10} {:>10} {:>5} {:>12}   {}",
-            "Comparison", "Mean Diff", "q-stat", "df", "Significant", "CI"
+            "{:<14} {:>10} {:>10} {:>8} {:>12}   {}",
+            "Comparison", "Mean Diff", "q-stat", "p-value", "Significant", "CI"
         )?;
-        writeln!(f, "{}", "-".repeat(78))?;
+        writeln!(f, "{}", "-".repeat(80))?;
         for c in &self.comparisons {
-            // Recover the Welch-Satterthwaite df from the q_critical we'd need
-            // Instead, just display the q_statistic (df is per-pair, stored implicitly)
             writeln!(
                 f,
-                "({:>2}, {:>2})       {:>10.4} {:>10.4} {:>5} {:>12}   [{:.4}, {:.4}]",
+                "({:>2}, {:>2})       {:>10.4} {:>10.4} {:>8.4} {:>12}   [{:.4}, {:.4}]",
                 c.group_i,
                 c.group_j,
                 c.mean_diff,
                 c.q_statistic,
-                "",
+                c.p_value,
                 if c.significant { "Yes" } else { "No" },
                 c.ci_lower,
                 c.ci_upper
@@ -400,6 +409,36 @@ impl fmt::Display for DunnettResult {
                 c.ci_upper
             )?;
         }
+        Ok(())
+    }
+}
+
+/// Results of a Levene / Brown-Forsythe test for equality of variances.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct LeveneResult {
+    /// F-statistic.
+    pub f_statistic: f64,
+    /// p-value.
+    pub p_value: f64,
+    /// Degrees of freedom between groups (k − 1).
+    pub df_between: usize,
+    /// Degrees of freedom within groups (N − k).
+    pub df_within: usize,
+    /// Significance level used.
+    pub alpha: f64,
+    /// Whether the variances differ significantly at the chosen alpha.
+    pub significant: bool,
+}
+
+impl fmt::Display for LeveneResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Brown-Forsythe / Levene Test for Equality of Variances")?;
+        writeln!(f, "  F({}, {}) = {:.4},  p = {:.4},  {} at alpha = {}",
+            self.df_between, self.df_within, self.f_statistic, self.p_value,
+            if self.significant { "UNEQUAL variances" } else { "equal variances" },
+            self.alpha
+        )?;
         Ok(())
     }
 }
@@ -539,52 +578,52 @@ pub fn q_critical(k: usize, df: usize, alpha: f64) -> Result<f64, TukeyError> {
     if k < 2 {
         return Err(TukeyError::TooFewGroups);
     }
-    if k > 10 {
-        return Err(TukeyError::TooManyGroups(k));
-    }
     if df < 1 {
         return Err(TukeyError::InsufficientDf);
     }
-
-    let table = if (alpha - 0.05).abs() < 1e-10 {
-        &Q_TABLE_05
-    } else if (alpha - 0.01).abs() < 1e-10 {
-        &Q_TABLE_01
-    } else {
+    if alpha <= 0.0 || alpha >= 1.0 {
         return Err(TukeyError::UnsupportedAlpha(alpha));
-    };
-
-    let row = &table[k - 2];
-
-    // df at or beyond the last table entry
-    if df >= 120 {
-        return Ok(row[24]);
     }
 
-    // Exact match
-    for (i, &d) in DF_VALUES.iter().enumerate() {
-        if d == df {
-            return Ok(row[i]);
-        }
-    }
-
-    // Find bounding entries and interpolate on 1/df
-    let mut lower_idx = 0;
-    for (i, &d) in DF_VALUES.iter().enumerate() {
-        if d < df {
-            lower_idx = i;
+    // Fast path: use table for k ≤ 10 and alpha ∈ {0.05, 0.01}
+    if k <= 10 {
+        let table_opt = if (alpha - 0.05).abs() < 1e-10 {
+            Some(&Q_TABLE_05)
+        } else if (alpha - 0.01).abs() < 1e-10 {
+            Some(&Q_TABLE_01)
         } else {
-            break;
+            None
+        };
+
+        if let Some(table) = table_opt {
+            let row = &table[k - 2];
+            if df >= 120 {
+                return Ok(row[24]);
+            }
+            for (i, &d) in DF_VALUES.iter().enumerate() {
+                if d == df {
+                    return Ok(row[i]);
+                }
+            }
+            let mut lower_idx = 0;
+            for (i, &d) in DF_VALUES.iter().enumerate() {
+                if d < df {
+                    lower_idx = i;
+                } else {
+                    break;
+                }
+            }
+            let upper_idx = lower_idx + 1;
+            let inv_df = 1.0 / df as f64;
+            let inv_lo = 1.0 / DF_VALUES[lower_idx] as f64;
+            let inv_hi = 1.0 / DF_VALUES[upper_idx] as f64;
+            let t = (inv_df - inv_hi) / (inv_lo - inv_hi);
+            return Ok(row[lower_idx] * t + row[upper_idx] * (1.0 - t));
         }
     }
-    let upper_idx = lower_idx + 1;
 
-    let inv_df = 1.0 / df as f64;
-    let inv_lo = 1.0 / DF_VALUES[lower_idx] as f64;
-    let inv_hi = 1.0 / DF_VALUES[upper_idx] as f64;
-    let t = (inv_df - inv_hi) / (inv_lo - inv_hi);
-
-    Ok(row[lower_idx] * t + row[upper_idx] * (1.0 - t))
+    // Numerical fallback: supports any k ≥ 2 and any alpha ∈ (0, 1)
+    Ok(q_critical_numerical(k, df, alpha))
 }
 
 /// Look up the critical value from the Dunnett distribution (two-sided).
@@ -674,9 +713,6 @@ pub fn tukey_hsd<T: AsRef<[f64]>>(data: &[T], alpha: f64) -> Result<TukeyResult,
     if k < 2 {
         return Err(TukeyError::TooFewGroups);
     }
-    if k > 10 {
-        return Err(TukeyError::TooManyGroups(k));
-    }
 
     // Validate groups, compute means and sizes
     let mut group_means = Vec::with_capacity(k);
@@ -727,6 +763,7 @@ pub fn tukey_hsd<T: AsRef<[f64]>>(data: &[T], alpha: f64) -> Result<TukeyResult,
                 .sqrt();
 
             let q_stat = mean_diff / se;
+            let p_value = (1.0 - ptukey_cdf(q_stat, k, df)).clamp(0.0, 1.0);
             let significant = q_stat > q_crit;
 
             let ci_half = q_crit * se;
@@ -737,6 +774,7 @@ pub fn tukey_hsd<T: AsRef<[f64]>>(data: &[T], alpha: f64) -> Result<TukeyResult,
                 mean_j: group_means[j],
                 mean_diff,
                 q_statistic: q_stat,
+                p_value,
                 significant,
                 ci_lower: raw_diff - ci_half,
                 ci_upper: raw_diff + ci_half,
@@ -852,6 +890,152 @@ fn f_sf(x: f64, d1: f64, d2: f64) -> f64 {
 }
 
 // ---------------------------------------------------------------------------
+// Numerical studentized range distribution (ptukey)
+// ---------------------------------------------------------------------------
+
+/// Standard normal CDF (Abramowitz & Stegun 26.2.17, max error ~7.5e-8).
+fn normal_cdf(x: f64) -> f64 {
+    if x < 0.0 {
+        return 1.0 - normal_cdf(-x);
+    }
+    let t = 1.0 / (1.0 + 0.2316419 * x);
+    let poly = t * (0.319381530
+        + t * (-0.356563782
+        + t * (1.781477937
+        + t * (-1.821255978
+        + t * 1.330274429))));
+    (1.0 - 0.3989422804014327 * (-0.5 * x * x).exp() * poly).clamp(0.0, 1.0)
+}
+
+/// 20-point Gauss-Legendre nodes on [−1, 1].
+const GL20_NODES: [f64; 20] = [
+    -0.9931285991850949, -0.9639719272779138, -0.9122344282513259,
+    -0.8391169718222188, -0.7463064833401270, -0.6360536807265150,
+    -0.5108670019508271, -0.3737060887154195, -0.2277858511416451,
+    -0.0765265211334973,
+     0.0765265211334973,  0.2277858511416451,  0.3737060887154195,
+     0.5108670019508271,  0.6360536807265150,  0.7463064833401270,
+     0.8391169718222188,  0.9122344282513259,  0.9639719272779138,
+     0.9931285991850949,
+];
+
+/// 20-point Gauss-Legendre weights on [−1, 1].
+const GL20_WEIGHTS: [f64; 20] = [
+    0.0176140071391521, 0.0406014298003869, 0.0626720483341091,
+    0.0832767415767048, 0.1019301198172404, 0.1181945319615184,
+    0.1316886384491766, 0.1420961093183820, 0.1491729864726037,
+    0.1527533871307258,
+    0.1527533871307258, 0.1491729864726037, 0.1420961093183820,
+    0.1316886384491766, 0.1181945319615184, 0.1019301198172404,
+    0.0832767415767048, 0.0626720483341091, 0.0406014298003869,
+    0.0176140071391521,
+];
+
+/// Inner range integral: k · ∫₋₈^8 φ(z) · [Φ(z+w) − Φ(z)]^(k−1) dz.
+///
+/// Uses composite GL-20 over four panels of width 4 ([-8,-4], [-4,0], [0,4], [4,8]),
+/// giving 80 effective nodes with spacing ≈0.3. This resolves the peak of the
+/// integrand (which moves with w and k) far more accurately than a single GL-20
+/// over [-8,8] (spacing ≈0.8).
+fn range_prob(w: f64, k: usize) -> f64 {
+    if w <= 0.0 {
+        return 0.0;
+    }
+    const PDF_SCALE: f64 = 0.3989422804014327; // 1/√(2π)
+    // Panel centers and half-widths for [-8,-4], [-4,0], [0,4], [4,8]
+    const PANEL_CENTERS: [f64; 4] = [-6.0, -2.0, 2.0, 6.0];
+    const PANEL_HALF: f64 = 2.0;
+
+    let mut sum = 0.0_f64;
+    for &center in &PANEL_CENTERS {
+        for i in 0..20 {
+            let z = center + PANEL_HALF * GL20_NODES[i];
+            let phi_z = PDF_SCALE * (-0.5 * z * z).exp();
+            let diff = (normal_cdf(z + w) - normal_cdf(z)).clamp(0.0, 1.0);
+            let diff_pow = if k <= 1 {
+                1.0
+            } else if diff == 0.0 {
+                0.0
+            } else {
+                ((k - 1) as f64 * diff.ln()).exp()
+            };
+            sum += GL20_WEIGHTS[i] * phi_z * diff_pow;
+        }
+    }
+    (k as f64 * sum * PANEL_HALF).clamp(0.0, 1.0)
+}
+
+/// CDF of the studentized range distribution P(Q ≤ q; k, df).
+///
+/// Computed via double Gauss-Legendre quadrature. Accurate to approximately
+/// 5 significant figures for df ≥ 2. Available as a public function for
+/// computing exact p-values or building custom tests.
+///
+/// # Arguments
+/// * `q`  — observed studentized range statistic (≥ 0)
+/// * `k`  — number of groups being compared (≥ 2)
+/// * `df` — error degrees of freedom (≥ 1)
+pub fn ptukey_cdf(q: f64, k: usize, df: usize) -> f64 {
+    if q <= 0.0 || df == 0 {
+        return 0.0;
+    }
+    let nu = df as f64;
+    let half_nu = nu / 2.0;
+    let ln_g = ln_gamma(half_nu);
+
+    // Outer integral: (1/Γ(ν/2)) ∫₀^∞ h(q·√(2u/ν)) · u^(ν/2−1) · e^{−u} du
+    //
+    // Log-substitution u = u_ref·e^z, u_ref = ν/2 (mean of Gamma(ν/2,1)).
+    // Centers the density peak in z-space at z ≈ 0 for every df value.
+    // Jacobian du = u dz, so integrand weight becomes u^(ν/2) · e^{−u}.
+    // ln(weight) = (ν/2)·ln(u) − u = half_nu·(ln_u_ref + z) − u.
+    //
+    // z_max = 8/√(ν/2): covers ±8 log-space std-devs (σ_z ≈ 1/√(ν/2)).
+    // GL on [−z_max, z_max] via z = z_max·node, Jacobian = z_max.
+    let u_ref = half_nu; // mean of Gamma(ν/2, 1)
+    let ln_u_ref = u_ref.ln();
+    let z_max = 8.0 / half_nu.sqrt();
+
+    let mut outer = 0.0_f64;
+    for i in 0..20 {
+        let z = z_max * GL20_NODES[i];
+        let u = u_ref * z.exp();
+        let w = q * (2.0 * u / nu).sqrt();
+        let inner = range_prob(w, k);
+
+        let ln_weight = half_nu * (ln_u_ref + z) - u;
+        if ln_weight < -700.0 {
+            continue;
+        }
+        let weight = ln_weight.exp();
+        if weight.is_finite() {
+            outer += GL20_WEIGHTS[i] * inner * weight;
+        }
+    }
+    (z_max * outer / ln_g.exp()).clamp(0.0, 1.0)
+}
+
+/// Numerically invert `ptukey_cdf` to find q such that P(Q > q; k, df) = alpha.
+fn q_critical_numerical(k: usize, df: usize, alpha: f64) -> f64 {
+    let target = 1.0 - alpha;
+    let mut lo = 0.0_f64;
+    let mut hi = 50.0_f64;
+    // Expand upper bound for extreme cases (very small df, large k)
+    while ptukey_cdf(hi, k, df) < target && hi < 1_000.0 {
+        hi *= 2.0;
+    }
+    for _ in 0..60 {
+        let mid = (lo + hi) / 2.0;
+        if ptukey_cdf(mid, k, df) < target {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    (lo + hi) / 2.0
+}
+
+// ---------------------------------------------------------------------------
 // One-way ANOVA
 // ---------------------------------------------------------------------------
 
@@ -932,6 +1116,13 @@ pub fn one_way_anova<T: AsRef<[f64]>>(data: &[T]) -> Result<AnovaResult, TukeyEr
 
     let p_value = f_sf(f_statistic, df_between as f64, df_within as f64);
 
+    let eta_squared = if ss_total > 0.0 { ss_between / ss_total } else { 0.0 };
+    let omega_squared = if ss_total > 0.0 {
+        ((ss_between - df_between as f64 * ms_within) / (ss_total + ms_within)).max(0.0)
+    } else {
+        0.0
+    };
+
     Ok(AnovaResult {
         ss_between,
         ss_within,
@@ -946,6 +1137,8 @@ pub fn one_way_anova<T: AsRef<[f64]>>(data: &[T]) -> Result<AnovaResult, TukeyEr
         grand_mean,
         group_means,
         group_sizes,
+        eta_squared,
+        omega_squared,
     })
 }
 
@@ -976,9 +1169,6 @@ pub fn games_howell<T: AsRef<[f64]>>(data: &[T], alpha: f64) -> Result<GamesHowe
     let k = data.len();
     if k < 2 {
         return Err(TukeyError::TooFewGroups);
-    }
-    if k > 10 {
-        return Err(TukeyError::TooManyGroups(k));
     }
 
     let mut group_means = Vec::with_capacity(k);
@@ -1026,6 +1216,7 @@ pub fn games_howell<T: AsRef<[f64]>>(data: &[T], alpha: f64) -> Result<GamesHowe
 
             let q_crit = q_critical(k, df_welch, alpha)?;
             let q_stat = mean_diff / se;
+            let p_value = (1.0 - ptukey_cdf(q_stat, k, df_welch)).clamp(0.0, 1.0);
             let significant = q_stat > q_crit;
 
             let ci_half = q_crit * se;
@@ -1036,6 +1227,7 @@ pub fn games_howell<T: AsRef<[f64]>>(data: &[T], alpha: f64) -> Result<GamesHowe
                 mean_j: group_means[j],
                 mean_diff,
                 q_statistic: q_stat,
+                p_value,
                 significant,
                 ci_lower: raw_diff - ci_half,
                 ci_upper: raw_diff + ci_half,
@@ -1162,6 +1354,65 @@ pub fn dunnett<T: AsRef<[f64]>>(data: &[T], control: usize, alpha: f64) -> Resul
         group_means,
         group_sizes,
         comparisons,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Levene / Brown-Forsythe test
+// ---------------------------------------------------------------------------
+
+/// Test whether group variances are equal (Brown-Forsythe variant, median-based).
+///
+/// Computes absolute deviations from each group's median, then runs a one-way
+/// ANOVA on those deviations. A significant result means you should prefer
+/// [`games_howell`] over [`tukey_hsd`].
+///
+/// # Arguments
+/// * `data`  — slice of groups; each group needs at least 2 observations
+/// * `alpha` — significance level for the `significant` flag
+///
+/// # Example
+/// ```
+/// use tukey_test::levene_test;
+///
+/// let data = vec![
+///     vec![1.0, 2.0, 3.0, 2.0, 1.0],           // small variance
+///     vec![1.0, 100.0, 50.0, 75.0, 25.0],        // large variance
+/// ];
+/// let r = levene_test(&data, 0.05).unwrap();
+/// assert!(r.significant); // variances are clearly unequal
+/// ```
+pub fn levene_test<T: AsRef<[f64]>>(data: &[T], alpha: f64) -> Result<LeveneResult, TukeyError> {
+    let k = data.len();
+    if k < 2 {
+        return Err(TukeyError::TooFewGroups);
+    }
+
+    let mut deviation_groups: Vec<Vec<f64>> = Vec::with_capacity(k);
+    for (i, group) in data.iter().enumerate() {
+        let g = group.as_ref();
+        if g.len() < 2 {
+            return Err(TukeyError::GroupTooSmall(i));
+        }
+        let mut sorted = g.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let n = sorted.len();
+        let median = if n % 2 == 0 {
+            (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
+        } else {
+            sorted[n / 2]
+        };
+        deviation_groups.push(g.iter().map(|&x| (x - median).abs()).collect());
+    }
+
+    let anova = one_way_anova(&deviation_groups)?;
+    Ok(LeveneResult {
+        f_statistic: anova.f_statistic,
+        p_value: anova.p_value,
+        df_between: anova.df_between,
+        df_within: anova.df_within,
+        alpha,
+        significant: anova.p_value < alpha,
     })
 }
 
@@ -1299,9 +1550,11 @@ mod tests {
     #[test]
     fn q_critical_errors() {
         assert_eq!(q_critical(1, 10, 0.05), Err(TukeyError::TooFewGroups));
-        assert_eq!(q_critical(11, 10, 0.05), Err(TukeyError::TooManyGroups(11)));
         assert_eq!(q_critical(3, 0, 0.05), Err(TukeyError::InsufficientDf));
-        assert_eq!(q_critical(3, 10, 0.10), Err(TukeyError::UnsupportedAlpha(0.10)));
+        assert_eq!(q_critical(3, 10, 0.0), Err(TukeyError::UnsupportedAlpha(0.0)));
+        assert_eq!(q_critical(3, 10, 1.0), Err(TukeyError::UnsupportedAlpha(1.0)));
+        // k > 10 now works numerically — no longer an error
+        assert!(q_critical(11, 10, 0.05).is_ok());
     }
 
     #[test]
