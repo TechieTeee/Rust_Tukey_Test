@@ -922,7 +922,11 @@ pub fn one_way_anova<T: AsRef<[f64]>>(data: &[T]) -> Result<AnovaResult, TukeyEr
 
     let f_statistic = if ms_within > 0.0 {
         ms_between / ms_within
+    } else if ms_between == 0.0 {
+        // All observations are identical — no variance at all
+        return Err(TukeyError::ZeroVariance);
     } else {
+        // Groups have different constants with zero within-group noise
         f64::INFINITY
     };
 
@@ -989,6 +993,9 @@ pub fn games_howell<T: AsRef<[f64]>>(data: &[T], alpha: f64) -> Result<GamesHowe
         }
         let mean = g.iter().sum::<f64>() / n as f64;
         let var = g.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / (n - 1) as f64;
+        if var == 0.0 {
+            return Err(TukeyError::ZeroVariance);
+        }
         group_means.push(mean);
         group_sizes.push(n);
         group_variances.push(var);
@@ -1224,6 +1231,13 @@ pub fn parse_csv<R: io::Read>(reader: R) -> Result<Vec<Vec<f64>>, TukeyError> {
                 column: col + 1,
                 value: trimmed.to_string(),
             })?;
+            if !val.is_finite() {
+                return Err(TukeyError::ParseError {
+                    line: line_num,
+                    column: col + 1,
+                    value: trimmed.to_string(),
+                });
+            }
             groups[col].push(val);
         }
     }
