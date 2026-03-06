@@ -1,13 +1,15 @@
-//! Tukey HSD (Honestly Significant Difference) test for pairwise group comparisons.
+//! Statistical tests for pairwise group comparisons.
 //!
 //! This crate provides:
-//! - [`tukey_hsd`] — run the full Tukey HSD test on grouped data
-//! - [`q_critical`] — look up critical values from the studentized range distribution
+//! - [`one_way_anova`] — one-way analysis of variance (F-test)
+//! - [`tukey_hsd`] — Tukey HSD test (assumes equal variances)
+//! - [`games_howell`] — Games-Howell test (does **not** assume equal variances)
+//! - [`q_critical`] — studentized range distribution critical value lookup
 //!
 //! # Example
 //!
 //! ```
-//! use tukey_test::tukey_hsd;
+//! use tukey_test::{one_way_anova, tukey_hsd};
 //!
 //! let data = vec![
 //!     vec![23.0, 25.0, 21.0, 24.0],  // Group A
@@ -15,6 +17,11 @@
 //!     vec![22.0, 24.0, 20.0, 23.0],  // Group C
 //! ];
 //!
+//! // Step 1: check if there is an overall difference
+//! let anova = one_way_anova(&data).unwrap();
+//! println!("{anova}");
+//!
+//! // Step 2: find which pairs differ
 //! let result = tukey_hsd(&data, 0.05).unwrap();
 //! println!("{result}");
 //!
@@ -45,6 +52,8 @@ pub enum TukeyError {
     UnsupportedAlpha(f64),
     /// Within-group variance is zero (all observations identical).
     ZeroVariance,
+    /// A group needs at least 2 observations (for per-group variance).
+    GroupTooSmall(usize),
 }
 
 impl fmt::Display for TukeyError {
@@ -64,6 +73,9 @@ impl fmt::Display for TukeyError {
             TukeyError::ZeroVariance => {
                 write!(f, "within-group variance is zero (all observations identical)")
             }
+            TukeyError::GroupTooSmall(i) => {
+                write!(f, "group {i} needs at least 2 observations")
+            }
         }
     }
 }
@@ -73,6 +85,66 @@ impl std::error::Error for TukeyError {}
 // ---------------------------------------------------------------------------
 // Result types
 // ---------------------------------------------------------------------------
+
+/// Results of a one-way ANOVA.
+#[derive(Debug, Clone)]
+pub struct AnovaResult {
+    /// Sum of squares between groups.
+    pub ss_between: f64,
+    /// Sum of squares within groups.
+    pub ss_within: f64,
+    /// Total sum of squares.
+    pub ss_total: f64,
+    /// Degrees of freedom between groups (k − 1).
+    pub df_between: usize,
+    /// Degrees of freedom within groups (N − k).
+    pub df_within: usize,
+    /// Total degrees of freedom (N − 1).
+    pub df_total: usize,
+    /// Mean square between groups.
+    pub ms_between: f64,
+    /// Mean square within groups.
+    pub ms_within: f64,
+    /// F statistic.
+    pub f_statistic: f64,
+    /// p-value (probability of observing this F or larger under H0).
+    pub p_value: f64,
+    /// Grand mean of all observations.
+    pub grand_mean: f64,
+    /// Mean of each group.
+    pub group_means: Vec<f64>,
+    /// Number of observations in each group.
+    pub group_sizes: Vec<usize>,
+}
+
+impl fmt::Display for AnovaResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "One-Way ANOVA")?;
+        writeln!(f)?;
+        writeln!(
+            f,
+            "{:<14} {:>10} {:>6} {:>12} {:>10} {:>10}",
+            "Source", "SS", "df", "MS", "F", "p-value"
+        )?;
+        writeln!(f, "{}", "-".repeat(68))?;
+        writeln!(
+            f,
+            "{:<14} {:>10.4} {:>6} {:>12.4} {:>10.4} {:>10.6}",
+            "Between", self.ss_between, self.df_between, self.ms_between, self.f_statistic, self.p_value
+        )?;
+        writeln!(
+            f,
+            "{:<14} {:>10.4} {:>6} {:>12.4}",
+            "Within", self.ss_within, self.df_within, self.ms_within
+        )?;
+        writeln!(
+            f,
+            "{:<14} {:>10.4} {:>6}",
+            "Total", self.ss_total, self.df_total
+        )?;
+        Ok(())
+    }
+}
 
 /// A single pairwise comparison between two groups.
 #[derive(Debug, Clone)]
@@ -148,6 +220,61 @@ impl fmt::Display for TukeyResult {
                 c.group_j,
                 c.mean_diff,
                 c.q_statistic,
+                if c.significant { "Yes" } else { "No" },
+                c.ci_lower,
+                c.ci_upper
+            )?;
+        }
+        Ok(())
+    }
+}
+
+/// Full results of a Games-Howell test.
+#[derive(Debug, Clone)]
+pub struct GamesHowellResult {
+    /// Number of groups.
+    pub groups: usize,
+    /// Significance level used.
+    pub alpha: f64,
+    /// Mean of each group.
+    pub group_means: Vec<f64>,
+    /// Number of observations in each group.
+    pub group_sizes: Vec<usize>,
+    /// Sample variance of each group.
+    pub group_variances: Vec<f64>,
+    /// All pairwise comparisons.
+    pub comparisons: Vec<PairwiseComparison>,
+}
+
+impl GamesHowellResult {
+    /// Returns only the comparisons that are statistically significant.
+    #[must_use]
+    pub fn significant_pairs(&self) -> Vec<&PairwiseComparison> {
+        self.comparisons.iter().filter(|c| c.significant).collect()
+    }
+}
+
+impl fmt::Display for GamesHowellResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Games-Howell Test Results (alpha = {})", self.alpha)?;
+        writeln!(f)?;
+        writeln!(
+            f,
+            "{:<14} {:>10} {:>10} {:>5} {:>12}   {}",
+            "Comparison", "Mean Diff", "q-stat", "df", "Significant", "CI"
+        )?;
+        writeln!(f, "{}", "-".repeat(78))?;
+        for c in &self.comparisons {
+            // Recover the Welch-Satterthwaite df from the q_critical we'd need
+            // Instead, just display the q_statistic (df is per-pair, stored implicitly)
+            writeln!(
+                f,
+                "({:>2}, {:>2})       {:>10.4} {:>10.4} {:>5} {:>12}   [{:.4}, {:.4}]",
+                c.group_i,
+                c.group_j,
+                c.mean_diff,
+                c.q_statistic,
+                "",
                 if c.significant { "Yes" } else { "No" },
                 c.ci_lower,
                 c.ci_upper
@@ -392,6 +519,294 @@ pub fn tukey_hsd(data: &[Vec<f64>], alpha: f64) -> Result<TukeyResult, TukeyErro
 }
 
 // ---------------------------------------------------------------------------
+// Numerical helpers (F-distribution via incomplete beta function)
+// ---------------------------------------------------------------------------
+
+/// Log-gamma function using the Lanczos approximation.
+fn ln_gamma(x: f64) -> f64 {
+    const COEFFS: [f64; 6] = [
+        76.18009172947146,
+        -86.50532032941677,
+        24.01409824083091,
+        -1.231739572450155,
+        0.1208650973866179e-2,
+        -0.5395239384953e-5,
+    ];
+    let mut tmp = x + 5.5;
+    tmp -= (x + 0.5) * tmp.ln();
+    let mut ser = 1.000000000190015_f64;
+    for (j, &c) in COEFFS.iter().enumerate() {
+        ser += c / (x + 1.0 + j as f64);
+    }
+    -tmp + (2.5066282746310005 * ser / x).ln()
+}
+
+/// Continued fraction evaluation for the regularized incomplete beta function.
+fn betacf(x: f64, a: f64, b: f64) -> f64 {
+    const MAX_ITER: usize = 200;
+    const EPS: f64 = 3.0e-12;
+    const FPMIN: f64 = 1.0e-30;
+
+    let qab = a + b;
+    let qap = a + 1.0;
+    let qam = a - 1.0;
+
+    let mut c = 1.0_f64;
+    let mut d = (1.0 - qab * x / qap).recip();
+    if d.abs() < FPMIN {
+        d = FPMIN;
+    }
+    let mut h = d;
+
+    for m in 1..=MAX_ITER {
+        let m_f = m as f64;
+
+        // Even step
+        let aa = m_f * (b - m_f) * x / ((qam + 2.0 * m_f) * (a + 2.0 * m_f));
+        d = 1.0 + aa * d;
+        if d.abs() < FPMIN { d = FPMIN; }
+        c = 1.0 + aa / c;
+        if c.abs() < FPMIN { c = FPMIN; }
+        d = d.recip();
+        h *= d * c;
+
+        // Odd step
+        let aa = -(a + m_f) * (qab + m_f) * x / ((a + 2.0 * m_f) * (qap + 2.0 * m_f));
+        d = 1.0 + aa * d;
+        if d.abs() < FPMIN { d = FPMIN; }
+        c = 1.0 + aa / c;
+        if c.abs() < FPMIN { c = FPMIN; }
+        d = d.recip();
+        let del = d * c;
+        h *= del;
+
+        if (del - 1.0).abs() < EPS {
+            return h;
+        }
+    }
+    h
+}
+
+/// Regularized incomplete beta function I_x(a, b).
+fn betai(x: f64, a: f64, b: f64) -> f64 {
+    if x <= 0.0 {
+        return 0.0;
+    }
+    if x >= 1.0 {
+        return 1.0;
+    }
+    let ln_beta = ln_gamma(a) + ln_gamma(b) - ln_gamma(a + b);
+    let front = (a * x.ln() + b * (1.0 - x).ln() - ln_beta).exp();
+
+    if x < (a + 1.0) / (a + b + 2.0) {
+        front * betacf(x, a, b) / a
+    } else {
+        1.0 - front * betacf(1.0 - x, b, a) / b
+    }
+}
+
+/// Survival function (1 − CDF) of the F-distribution: P(F ≥ x | d1, d2).
+fn f_sf(x: f64, d1: f64, d2: f64) -> f64 {
+    if x <= 0.0 {
+        return 1.0;
+    }
+    betai(d2 / (d2 + d1 * x), d2 / 2.0, d1 / 2.0)
+}
+
+// ---------------------------------------------------------------------------
+// One-way ANOVA
+// ---------------------------------------------------------------------------
+
+/// Perform a one-way analysis of variance (ANOVA).
+///
+/// Tests the null hypothesis that all group means are equal.
+///
+/// # Example
+/// ```
+/// use tukey_test::one_way_anova;
+///
+/// let data = vec![
+///     vec![6.0, 8.0, 4.0, 5.0, 3.0, 4.0],
+///     vec![8.0, 12.0, 9.0, 11.0, 6.0, 8.0],
+///     vec![13.0, 9.0, 11.0, 8.0, 12.0, 14.0],
+/// ];
+/// let result = one_way_anova(&data).unwrap();
+/// assert!(result.p_value < 0.05);
+/// ```
+pub fn one_way_anova(data: &[Vec<f64>]) -> Result<AnovaResult, TukeyError> {
+    let k = data.len();
+    if k < 2 {
+        return Err(TukeyError::TooFewGroups);
+    }
+
+    let mut group_means = Vec::with_capacity(k);
+    let mut group_sizes = Vec::with_capacity(k);
+    let mut n_total: usize = 0;
+    let mut grand_sum = 0.0_f64;
+
+    for (i, group) in data.iter().enumerate() {
+        if group.is_empty() {
+            return Err(TukeyError::EmptyGroup(i));
+        }
+        let n = group.len();
+        let s: f64 = group.iter().sum();
+        group_sizes.push(n);
+        group_means.push(s / n as f64);
+        n_total += n;
+        grand_sum += s;
+    }
+
+    let df_between = k - 1;
+    let df_within = n_total - k;
+    if df_within < 1 {
+        return Err(TukeyError::InsufficientDf);
+    }
+    let df_total = n_total - 1;
+    let grand_mean = grand_sum / n_total as f64;
+
+    let mut ss_between = 0.0;
+    for (i, &mean) in group_means.iter().enumerate() {
+        ss_between += group_sizes[i] as f64 * (mean - grand_mean).powi(2);
+    }
+
+    let mut ss_within = 0.0;
+    for (i, group) in data.iter().enumerate() {
+        let mean = group_means[i];
+        for &x in group {
+            ss_within += (x - mean).powi(2);
+        }
+    }
+
+    let ss_total = ss_between + ss_within;
+    let ms_between = ss_between / df_between as f64;
+    let ms_within = ss_within / df_within as f64;
+
+    let f_statistic = if ms_within > 0.0 {
+        ms_between / ms_within
+    } else {
+        f64::INFINITY
+    };
+
+    let p_value = f_sf(f_statistic, df_between as f64, df_within as f64);
+
+    Ok(AnovaResult {
+        ss_between,
+        ss_within,
+        ss_total,
+        df_between,
+        df_within,
+        df_total,
+        ms_between,
+        ms_within,
+        f_statistic,
+        p_value,
+        grand_mean,
+        group_means,
+        group_sizes,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Games-Howell test
+// ---------------------------------------------------------------------------
+
+/// Perform a Games-Howell post-hoc test.
+///
+/// Unlike Tukey HSD, Games-Howell does **not** assume equal variances or
+/// equal sample sizes. It uses per-pair standard errors and
+/// Welch-Satterthwaite degrees of freedom.
+///
+/// # Example
+/// ```
+/// use tukey_test::games_howell;
+///
+/// // Groups with very different variances
+/// let data = vec![
+///     vec![4.0, 5.0, 3.0, 4.0, 6.0],
+///     vec![20.0, 30.0, 25.0, 35.0, 28.0],
+///     vec![5.0, 7.0, 6.0, 4.0, 5.0],
+/// ];
+/// let result = games_howell(&data, 0.05).unwrap();
+/// assert!(!result.significant_pairs().is_empty());
+/// ```
+pub fn games_howell(data: &[Vec<f64>], alpha: f64) -> Result<GamesHowellResult, TukeyError> {
+    let k = data.len();
+    if k < 2 {
+        return Err(TukeyError::TooFewGroups);
+    }
+    if k > 10 {
+        return Err(TukeyError::TooManyGroups(k));
+    }
+
+    let mut group_means = Vec::with_capacity(k);
+    let mut group_sizes = Vec::with_capacity(k);
+    let mut group_variances = Vec::with_capacity(k);
+
+    for (i, group) in data.iter().enumerate() {
+        let n = group.len();
+        if n < 2 {
+            return Err(TukeyError::GroupTooSmall(i));
+        }
+        let mean = group.iter().sum::<f64>() / n as f64;
+        let var = group.iter().map(|&x| (x - mean).powi(2)).sum::<f64>() / (n - 1) as f64;
+        group_means.push(mean);
+        group_sizes.push(n);
+        group_variances.push(var);
+    }
+
+    let mut comparisons = Vec::new();
+    for i in 0..k {
+        for j in (i + 1)..k {
+            let ni = group_sizes[i] as f64;
+            let nj = group_sizes[j] as f64;
+            let vi = group_variances[i];
+            let vj = group_variances[j];
+
+            let raw_diff = group_means[i] - group_means[j];
+            let mean_diff = raw_diff.abs();
+
+            // Games-Howell standard error
+            let se = ((vi / ni + vj / nj) / 2.0).sqrt();
+
+            // Welch-Satterthwaite degrees of freedom
+            let a_term = vi / ni;
+            let b_term = vj / nj;
+            let numerator = (a_term + b_term).powi(2);
+            let denominator =
+                a_term.powi(2) / (ni - 1.0) + b_term.powi(2) / (nj - 1.0);
+            let df_welch = (numerator / denominator).floor() as usize;
+            let df_welch = df_welch.max(1);
+
+            let q_crit = q_critical(k, df_welch, alpha)?;
+            let q_stat = mean_diff / se;
+            let significant = q_stat > q_crit;
+
+            let ci_half = q_crit * se;
+            comparisons.push(PairwiseComparison {
+                group_i: i,
+                group_j: j,
+                mean_i: group_means[i],
+                mean_j: group_means[j],
+                mean_diff,
+                q_statistic: q_stat,
+                significant,
+                ci_lower: raw_diff - ci_half,
+                ci_upper: raw_diff + ci_half,
+            });
+        }
+    }
+
+    Ok(GamesHowellResult {
+        groups: k,
+        alpha,
+        group_means,
+        group_sizes,
+        group_variances,
+        comparisons,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -487,5 +902,113 @@ mod tests {
         let output = format!("{result}");
         assert!(output.contains("Tukey HSD"));
         assert!(output.contains("q_critical"));
+    }
+
+    // --- ANOVA tests ---
+
+    #[test]
+    fn anova_basic() {
+        let data = vec![
+            vec![6.0, 8.0, 4.0, 5.0, 3.0, 4.0],
+            vec![8.0, 12.0, 9.0, 11.0, 6.0, 8.0],
+            vec![13.0, 9.0, 11.0, 8.0, 12.0, 14.0],
+        ];
+        let r = one_way_anova(&data).unwrap();
+        assert_eq!(r.df_between, 2);
+        assert_eq!(r.df_within, 15);
+        assert_eq!(r.df_total, 17);
+        // F should be significant
+        assert!(r.p_value < 0.01, "p = {}", r.p_value);
+        // Check SS_total = SS_between + SS_within
+        assert!((r.ss_total - r.ss_between - r.ss_within).abs() < 1e-10);
+    }
+
+    #[test]
+    fn anova_no_difference() {
+        // Groups with same mean — F should be small, p large
+        let data = vec![
+            vec![10.0, 11.0, 9.0, 10.0],
+            vec![10.0, 9.0, 11.0, 10.0],
+        ];
+        let r = one_way_anova(&data).unwrap();
+        assert!(r.p_value > 0.5, "p = {}", r.p_value);
+    }
+
+    #[test]
+    fn anova_display() {
+        let data = vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]];
+        let r = one_way_anova(&data).unwrap();
+        let output = format!("{r}");
+        assert!(output.contains("One-Way ANOVA"));
+        assert!(output.contains("Between"));
+        assert!(output.contains("Within"));
+    }
+
+    #[test]
+    fn anova_errors() {
+        assert!(one_way_anova(&[vec![1.0]]).is_err());
+        assert!(one_way_anova(&[vec![1.0], vec![]]).is_err());
+    }
+
+    // --- F-distribution helper tests ---
+
+    #[test]
+    fn f_sf_known_values() {
+        // F(1, 1) at x=161.45 should give p ≈ 0.05 (approximately)
+        // More stable check: F(2, 15) at x=3.68 gives p ≈ 0.05
+        let p = f_sf(3.68, 2.0, 15.0);
+        assert!((p - 0.05).abs() < 0.01, "p = {p}");
+
+        // Very large F should give p ≈ 0
+        let p = f_sf(100.0, 2.0, 15.0);
+        assert!(p < 0.001, "p = {p}");
+
+        // F = 0 should give p = 1
+        let p = f_sf(0.0, 2.0, 15.0);
+        assert!((p - 1.0).abs() < 1e-10, "p = {p}");
+    }
+
+    // --- Games-Howell tests ---
+
+    #[test]
+    fn games_howell_basic() {
+        // Groups with different variances
+        let data = vec![
+            vec![4.0, 5.0, 3.0, 4.0, 6.0],
+            vec![20.0, 30.0, 25.0, 35.0, 28.0],
+            vec![5.0, 7.0, 6.0, 4.0, 5.0],
+        ];
+        let r = games_howell(&data, 0.05).unwrap();
+        assert_eq!(r.groups, 3);
+        assert_eq!(r.comparisons.len(), 3);
+
+        // Group 1 (mean ~27.6) should differ from groups 0 and 2
+        let sig = r.significant_pairs();
+        assert!(
+            sig.iter().any(|c| c.group_i == 0 && c.group_j == 1),
+            "groups 0 and 1 should differ"
+        );
+        assert!(
+            sig.iter().any(|c| c.group_i == 1 && c.group_j == 2),
+            "groups 1 and 2 should differ"
+        );
+    }
+
+    #[test]
+    fn games_howell_unequal_sizes() {
+        let data = vec![
+            vec![2.0, 4.0, 3.0],
+            vec![10.0, 12.0, 11.0, 13.0, 9.0],
+            vec![5.0, 6.0, 4.0, 7.0],
+        ];
+        let r = games_howell(&data, 0.05).unwrap();
+        assert_eq!(r.group_sizes, vec![3, 5, 4]);
+    }
+
+    #[test]
+    fn games_howell_errors() {
+        // Need at least 2 observations per group for variance
+        let err = games_howell(&[vec![1.0], vec![2.0, 3.0]], 0.05).unwrap_err();
+        assert_eq!(err, TukeyError::GroupTooSmall(0));
     }
 }
